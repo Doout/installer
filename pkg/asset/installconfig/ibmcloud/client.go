@@ -354,6 +354,10 @@ func (c *Client) getCISDNSZones(ctx context.Context) ([]responses.DNSZoneRespons
 		listZonesResponse, _, err := zonesService.ListZones(options)
 
 		if listZonesResponse == nil {
+			if strings.HasPrefix(err.Error(), "Resource is not valid") {
+				// If the CIS is created but no Domain is added, the API returns an error.
+				continue
+			}
 			return nil, err
 		}
 

@@ -6,12 +6,15 @@ package iampolicy
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/conns"
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/flex"
+	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/validate"
 	"github.com/IBM/go-sdk-core/v5/core"
 	"github.com/IBM/platform-services-go-sdk/iampolicymanagementv1"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
@@ -29,17 +32,17 @@ func ResourceIBMIAMAuthorizationPolicy() *schema.Resource {
 				Type:         schema.TypeString,
 				Optional:     true,
 				Computed:     true,
-				ExactlyOneOf: []string{"source_service_name", "subject_attributes"},
-				Description:  "The source service name",
 				ForceNew:     true,
+				AtLeastOneOf: []string{"source_service_name", "source_resource_group_id", "subject_attributes"},
+				Description:  "The source service name",
 			},
 
 			"target_service_name": {
 				Type:         schema.TypeString,
 				Optional:     true,
 				Computed:     true,
-				ExactlyOneOf: []string{"target_service_name", "resource_attributes"},
 				ForceNew:     true,
+				AtLeastOneOf: []string{"target_service_name", "target_resource_type", "resource_attributes"},
 				Description:  "The target service name",
 			},
 
@@ -75,6 +78,8 @@ func ResourceIBMIAMAuthorizationPolicy() *schema.Resource {
 				ForceNew:      true,
 				ConflictsWith: []string{"subject_attributes"},
 				Description:   "The source resource group Id",
+				ValidateFunc: validate.InvokeValidator("ibm_iam_authorization_policy",
+					"source_resource_group_id"),
 			},
 
 			"target_resource_group_id": {
@@ -84,6 +89,8 @@ func ResourceIBMIAMAuthorizationPolicy() *schema.Resource {
 				ForceNew:      true,
 				ConflictsWith: []string{"resource_attributes"},
 				Description:   "The target resource group Id",
+				ValidateFunc: validate.InvokeValidator("ibm_iam_authorization_policy",
+					"target_resource_group_id"),
 			},
 
 			"source_resource_type": {
@@ -119,7 +126,7 @@ func ResourceIBMIAMAuthorizationPolicy() *schema.Resource {
 				Computed:      true,
 				ForceNew:      true,
 				Description:   "Set subject attributes.",
-				ConflictsWith: []string{"source_resource_instance_id", "source_resource_group_id", "source_resource_type", "source_service_account"},
+				ConflictsWith: []string{"source_service_name", "source_resource_instance_id", "source_resource_group_id", "source_resource_type", "source_service_account"},
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"name": {
@@ -142,7 +149,7 @@ func ResourceIBMIAMAuthorizationPolicy() *schema.Resource {
 				Computed:      true,
 				ForceNew:      true,
 				Description:   "Set resource attributes.",
-				ConflictsWith: []string{"target_resource_instance_id", "target_resource_group_id", "target_resource_type"},
+				ConflictsWith: []string{"target_service_name", "target_resource_instance_id", "target_resource_group_id", "target_resource_type"},
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"name": {
@@ -186,6 +193,28 @@ func ResourceIBMIAMAuthorizationPolicy() *schema.Resource {
 	}
 }
 
+func ResourceIBMIAMAuthorizationPolicyValidator() *validate.ResourceValidator {
+	validateSchema := make([]validate.ValidateSchema, 0)
+	validateSchema = append(validateSchema,
+		validate.ValidateSchema{
+			Identifier:                 "source_resource_group_id",
+			ValidateFunctionIdentifier: validate.ValidateCloudData,
+			Type:                       validate.TypeString,
+			CloudDataType:              "resource_group",
+			CloudDataRange:             []string{"resolved_to:id"},
+			Optional:                   true})
+	validateSchema = append(validateSchema,
+		validate.ValidateSchema{
+			Identifier:                 "target_resource_group_id",
+			ValidateFunctionIdentifier: validate.ValidateCloudData,
+			Type:                       validate.TypeString,
+			CloudDataType:              "resource_group",
+			CloudDataRange:             []string{"resolved_to:id"},
+			Optional:                   true})
+
+	iBMIAMAuthorizationPolicyValidator := validate.ResourceValidator{ResourceName: "ibm_iam_authorization_policy", Schema: validateSchema}
+	return &iBMIAMAuthorizationPolicyValidator
+}
 func resourceIBMIAMAuthorizationPolicyCreate(d *schema.ResourceData, meta interface{}) error {
 
 	var sourceServiceName, targetServiceName string
@@ -220,13 +249,15 @@ func resourceIBMIAMAuthorizationPolicyCreate(d *schema.ResourceData, meta interf
 		}
 	} else {
 
-		sourceServiceName = d.Get("source_service_name").(string)
+		if name, ok := d.GetOk("source_service_name"); ok {
+			sourceServiceName = name.(string)
 
-		serviceNameSubjectAttribute := &iampolicymanagementv1.SubjectAttribute{
-			Name:  core.StringPtr("serviceName"),
-			Value: &sourceServiceName,
+			serviceNameSubjectAttribute := &iampolicymanagementv1.SubjectAttribute{
+				Name:  core.StringPtr("serviceName"),
+				Value: &sourceServiceName,
+			}
+			policySubject.Attributes = append(policySubject.Attributes, *serviceNameSubjectAttribute)
 		}
-		policySubject.Attributes = append(policySubject.Attributes, *serviceNameSubjectAttribute)
 
 		sourceServiceAccount := userDetails.UserAccount
 		if account, ok := d.GetOk("source_service_account"); ok {
@@ -275,6 +306,9 @@ func resourceIBMIAMAuthorizationPolicyCreate(d *schema.ResourceData, meta interf
 			if name == "serviceName" {
 				targetServiceName = value
 			}
+			if name == "resourceType" && targetServiceName == "" {
+				targetServiceName = "resource-controller"
+			}
 			at := iampolicymanagementv1.ResourceAttribute{
 				Name:     &name,
 				Value:    &value,
@@ -283,13 +317,15 @@ func resourceIBMIAMAuthorizationPolicyCreate(d *schema.ResourceData, meta interf
 			policyResource.Attributes = append(policyResource.Attributes, at)
 		}
 	} else {
-		targetServiceName = d.Get("target_service_name").(string)
-		serviceNameResourceAttribute := &iampolicymanagementv1.ResourceAttribute{
-			Name:     core.StringPtr("serviceName"),
-			Value:    core.StringPtr(targetServiceName),
-			Operator: core.StringPtr("stringEquals"),
+		if name, ok := d.GetOk("target_service_name"); ok {
+			targetServiceName = name.(string)
+			serviceNameResourceAttribute := &iampolicymanagementv1.ResourceAttribute{
+				Name:     core.StringPtr("serviceName"),
+				Value:    core.StringPtr(targetServiceName),
+				Operator: core.StringPtr("stringEquals"),
+			}
+			policyResource.Attributes = append(policyResource.Attributes, *serviceNameResourceAttribute)
 		}
-		policyResource.Attributes = append(policyResource.Attributes, *serviceNameResourceAttribute)
 
 		accountIDResourceAttribute := &iampolicymanagementv1.ResourceAttribute{
 			Name:     core.StringPtr("accountId"),
@@ -313,6 +349,9 @@ func resourceIBMIAMAuthorizationPolicyCreate(d *schema.ResourceData, meta interf
 				Value: core.StringPtr(tType.(string)),
 			}
 			policyResource.Attributes = append(policyResource.Attributes, resourceTypeResourceAttribute)
+			if targetServiceName == "" {
+				targetServiceName = "resource-controller"
+			}
 		}
 
 		if tResGrpID, ok := d.GetOk("target_resource_group_id"); ok {
@@ -384,6 +423,22 @@ func resourceIBMIAMAuthorizationPolicyRead(d *schema.ResourceData, meta interfac
 	}
 
 	authorizationPolicy, resp, err := iampapClient.GetPolicy(getPolicyOptions)
+
+	err = resource.Retry(5*time.Minute, func() *resource.RetryError {
+		var err error
+		authorizationPolicy, resp, err = iampapClient.GetPolicy(getPolicyOptions)
+		if err != nil || authorizationPolicy == nil {
+			if resp != nil && resp.StatusCode == 404 {
+				return resource.RetryableError(err)
+			}
+			return resource.NonRetryableError(err)
+		}
+		return nil
+	})
+
+	if conns.IsResourceTimeoutError(err) {
+		authorizationPolicy, resp, err = iampapClient.GetPolicy(getPolicyOptions)
+	}
 	if err != nil || resp == nil {
 		return fmt.Errorf("[ERROR] Error retrieving authorizationPolicy: %s %s", err, resp)
 	}

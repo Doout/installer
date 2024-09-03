@@ -36,11 +36,9 @@ module "pi_network" {
   source = "./power_network"
 
   cluster_id        = var.cluster_id
-  cloud_instance_id = var.powervs_cloud_instance_id
+  cloud_instance_id = module.iaas.si_guid
   resource_group    = var.powervs_resource_group
-  pvs_network_name  = var.powervs_network_name
   machine_cidr      = var.machine_v4_cidrs[0]
-  cloud_conn_name   = var.powervs_ccon_name
   vpc_crn           = module.vpc.vpc_crn
   dns_server        = module.dns.dns_server
   enable_snat       = var.powervs_enable_snat
@@ -50,19 +48,19 @@ resource "ibm_pi_key" "cluster_key" {
   provider             = ibm.powervs
   pi_key_name          = "${var.cluster_id}-key"
   pi_ssh_key           = var.powervs_ssh_key
-  pi_cloud_instance_id = var.powervs_cloud_instance_id
+  pi_cloud_instance_id = module.iaas.si_guid
 }
 
 module "master" {
   providers = {
     ibm = ibm.powervs
   }
-  source            = "./master"
-  cloud_instance_id = var.powervs_cloud_instance_id
-  cluster_id        = var.cluster_id
-  resource_group    = var.powervs_resource_group
-  instance_count    = var.master_count
+  source = "./master"
 
+  cloud_instance_id   = module.iaas.si_guid
+  cluster_id          = var.cluster_id
+  resource_group      = var.powervs_resource_group
+  instance_count      = var.master_count
   api_key             = var.powervs_api_key
   powervs_region      = var.powervs_region
   powervs_zone        = var.powervs_zone
@@ -73,7 +71,7 @@ module "master" {
   ignition            = var.ignition_master
   sys_type            = var.powervs_sys_type
   proc_type           = var.powervs_proc_type
-  ssh_key_id          = ibm_pi_key.cluster_key.key_id
+  ssh_key_name        = ibm_pi_key.cluster_key.name
   image_id            = ibm_pi_image.boot_image.image_id
   dhcp_network_id     = module.pi_network.dhcp_network_id
   dhcp_id             = module.pi_network.dhcp_id
@@ -87,7 +85,7 @@ module "master" {
 resource "ibm_pi_image" "boot_image" {
   provider                  = ibm.powervs
   pi_image_name             = "rhcos-${var.cluster_id}"
-  pi_cloud_instance_id      = var.powervs_cloud_instance_id
+  pi_cloud_instance_id      = module.iaas.si_guid
   pi_image_bucket_name      = var.powervs_image_bucket_name
   pi_image_bucket_access    = "public"
   pi_image_bucket_region    = var.powervs_cos_region
@@ -98,7 +96,7 @@ resource "ibm_pi_image" "boot_image" {
 data "ibm_pi_dhcp" "dhcp_service" {
   provider             = ibm.powervs
   depends_on           = [module.master]
-  pi_cloud_instance_id = var.powervs_cloud_instance_id
+  pi_cloud_instance_id = module.iaas.si_guid
   pi_dhcp_id           = module.pi_network.dhcp_id
 }
 
@@ -141,4 +139,36 @@ module "dns" {
   publish_strategy           = var.powervs_publish_strategy
   enable_snat                = var.powervs_enable_snat
   # dns_vm_image_name        = @FUTURE
+}
+
+module "transit_gateway" {
+  providers = {
+    ibm = ibm.vpc
+  }
+  source = "./transit_gateway"
+
+  cluster_id               = var.cluster_id
+  resource_group           = var.powervs_resource_group
+  service_instance_crn     = module.iaas.si_crn
+  attached_transit_gateway = var.powervs_attached_transit_gateway
+  tg_connection_vpc_id     = var.powervs_tg_connection_vpc_id
+  vpc_crn                  = module.vpc.vpc_crn
+  vpc_region               = var.powervs_vpc_region
+}
+
+module "iaas" {
+  providers = {
+    ibm = ibm.vpc
+  }
+  source = "./iaas"
+
+  #
+  # define and pass variables to:
+  # data/data/powervs/cluster/iaas/variables.tf
+  #
+  cluster_id            = var.cluster_id
+  resource_group        = var.powervs_resource_group
+  powervs_zone          = var.powervs_zone
+  service_instance_name = var.powervs_service_instance_name
+  wait_for_workspace    = var.powervs_wait_for_workspace
 }

@@ -6,29 +6,29 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/ghodss/yaml"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/yaml"
 
+	"github.com/openshift/api/features"
 	"github.com/openshift/installer/pkg/asset"
 	"github.com/openshift/installer/pkg/asset/installconfig"
 	ibmcloudmachines "github.com/openshift/installer/pkg/asset/machines/ibmcloud"
-	alibabacloudmanifests "github.com/openshift/installer/pkg/asset/manifests/alibabacloud"
 	"github.com/openshift/installer/pkg/asset/manifests/azure"
+	"github.com/openshift/installer/pkg/asset/manifests/capiutils"
 	gcpmanifests "github.com/openshift/installer/pkg/asset/manifests/gcp"
 	ibmcloudmanifests "github.com/openshift/installer/pkg/asset/manifests/ibmcloud"
 	nutanixmanifests "github.com/openshift/installer/pkg/asset/manifests/nutanix"
 	openstackmanifests "github.com/openshift/installer/pkg/asset/manifests/openstack"
 	powervsmanifests "github.com/openshift/installer/pkg/asset/manifests/powervs"
 	vspheremanifests "github.com/openshift/installer/pkg/asset/manifests/vsphere"
-	alibabacloudtypes "github.com/openshift/installer/pkg/types/alibabacloud"
 	awstypes "github.com/openshift/installer/pkg/types/aws"
 	azuretypes "github.com/openshift/installer/pkg/types/azure"
 	baremetaltypes "github.com/openshift/installer/pkg/types/baremetal"
+	externaltypes "github.com/openshift/installer/pkg/types/external"
 	gcptypes "github.com/openshift/installer/pkg/types/gcp"
 	ibmcloudtypes "github.com/openshift/installer/pkg/types/ibmcloud"
-	libvirttypes "github.com/openshift/installer/pkg/types/libvirt"
 	nonetypes "github.com/openshift/installer/pkg/types/none"
 	nutanixtypes "github.com/openshift/installer/pkg/types/nutanix"
 	openstacktypes "github.com/openshift/installer/pkg/types/openstack"
@@ -75,7 +75,9 @@ func (*CloudProviderConfig) Dependencies() []asset.Asset {
 }
 
 // Generate generates the CloudProviderConfig.
-func (cpc *CloudProviderConfig) Generate(dependencies asset.Parents) error {
+//
+//nolint:gocyclo
+func (cpc *CloudProviderConfig) Generate(ctx context.Context, dependencies asset.Parents) error {
 	installConfig := &installconfig.InstallConfig{}
 	clusterID := &installconfig.ClusterID{}
 	dependencies.Get(installConfig, clusterID)
@@ -93,34 +95,23 @@ func (cpc *CloudProviderConfig) Generate(dependencies asset.Parents) error {
 	}
 
 	switch installConfig.Config.Platform.Name() {
-	case libvirttypes.Name, nonetypes.Name, baremetaltypes.Name, ovirttypes.Name:
+	case externaltypes.Name, nonetypes.Name, baremetaltypes.Name, ovirttypes.Name:
 		return nil
 	case awstypes.Name:
 		// Store the additional trust bundle in the ca-bundle.pem key if the cluster is being installed on a C2S region.
 		trustBundle := installConfig.Config.AdditionalTrustBundle
-		if trustBundle == "" || !awstypes.IsSecretRegion(installConfig.Config.AWS.Region) {
-			return nil
+		if trustBundle != "" && awstypes.IsSecretRegion(installConfig.Config.AWS.Region) {
+			cm.Data[cloudProviderConfigCABundleDataKey] = trustBundle
 		}
-		cm.Data[cloudProviderConfigCABundleDataKey] = trustBundle
+
 		// Include a non-empty kube config to appease components--such as the kube-apiserver--that
 		// expect there to be a kube config if the cloud-provider-config ConfigMap exists. See
 		// https://bugzilla.redhat.com/show_bug.cgi?id=1926975.
 		// Note that the newline is required in order to be valid yaml.
 		cm.Data[cloudProviderConfigDataKey] = `[Global]
 `
-	case alibabacloudtypes.Name:
-		alibabacloudConfig, err := alibabacloudmanifests.CloudConfig{
-			Global: alibabacloudmanifests.GlobalConfig{
-				ClusterID: clusterID.InfraID,
-				Region:    installConfig.Config.AlibabaCloud.Region,
-			},
-		}.JSON()
-		if err != nil {
-			return errors.Wrap(err, "could not create Alibaba Cloud provider config")
-		}
-		cm.Data[cloudProviderConfigDataKey] = alibabacloudConfig
 	case openstacktypes.Name:
-		cloudProviderConfigData, cloudProviderConfigCABundleData, err := openstackmanifests.GenerateCloudProviderConfig(*installConfig.Config)
+		cloudProviderConfigData, cloudProviderConfigCABundleData, err := openstackmanifests.GenerateCloudProviderConfig(ctx, *installConfig.Config)
 		if err != nil {
 			return errors.Wrap(err, "failed to generate OpenStack provider config")
 		}
@@ -135,7 +126,7 @@ func (cpc *CloudProviderConfig) Generate(dependencies asset.Parents) error {
 			return errors.Wrap(err, "could not get azure session")
 		}
 
-		nsg := fmt.Sprintf("%s-nsg", clusterID.InfraID)
+		nsg := installConfig.Config.Azure.NetworkSecurityGroupName(clusterID.InfraID)
 		nrg := installConfig.Config.Azure.ClusterResourceGroupName(clusterID.InfraID)
 		if installConfig.Config.Azure.NetworkResourceGroupName != "" {
 			nrg = installConfig.Config.Azure.NetworkResourceGroupName
@@ -185,13 +176,13 @@ func (cpc *CloudProviderConfig) Generate(dependencies asset.Parents) error {
 		}
 		cm.Data[cloudProviderConfigDataKey] = gcpConfig
 	case ibmcloudtypes.Name:
-		accountID, err := installConfig.IBMCloud.AccountID(context.TODO())
+		accountID, err := installConfig.IBMCloud.AccountID(ctx)
 		if err != nil {
 			return err
 		}
 
 		subnetNames := []string{}
-		cpSubnets, err := installConfig.IBMCloud.ControlPlaneSubnets(context.TODO())
+		cpSubnets, err := installConfig.IBMCloud.ControlPlaneSubnets(ctx)
 		if err != nil {
 			return errors.Wrap(err, "could not retrieve IBM Cloud control plane subnets")
 		}
@@ -199,7 +190,7 @@ func (cpc *CloudProviderConfig) Generate(dependencies asset.Parents) error {
 			subnetNames = append(subnetNames, cpSubnet.Name)
 		}
 
-		computeSubnets, err := installConfig.IBMCloud.ComputeSubnets(context.TODO())
+		computeSubnets, err := installConfig.IBMCloud.ComputeSubnets(ctx)
 		if err != nil {
 			return errors.Wrap(err, "could not retrieve IBM Cloud compute subnets")
 		}
@@ -215,7 +206,7 @@ func (cpc *CloudProviderConfig) Generate(dependencies asset.Parents) error {
 		compute.Set(installConfig.Config.WorkerMachinePool().Platform.IBMCloud)
 
 		if len(controlPlane.Zones) == 0 || len(compute.Zones) == 0 {
-			zones, err := ibmcloudmachines.AvailabilityZones(installConfig.Config.IBMCloud.Region)
+			zones, err := ibmcloudmachines.AvailabilityZones(installConfig.Config.IBMCloud.Region, installConfig.Config.Platform.IBMCloud.ServiceEndpoints)
 			if err != nil {
 				return errors.Wrapf(err, "could not get availability zones for %s", installConfig.Config.IBMCloud.Region)
 			}
@@ -236,6 +227,7 @@ func (cpc *CloudProviderConfig) Generate(dependencies asset.Parents) error {
 			subnetNames,
 			controlPlane.Zones,
 			compute.Zones,
+			installConfig.Config.Platform.IBMCloud.ServiceEndpoints,
 		)
 		if err != nil {
 			return errors.Wrap(err, "could not create cloud provider config")
@@ -247,7 +239,7 @@ func (cpc *CloudProviderConfig) Generate(dependencies asset.Parents) error {
 			err                  error
 		)
 
-		if accountID, err = installConfig.PowerVS.AccountID(context.TODO()); err != nil {
+		if accountID, err = installConfig.PowerVS.AccountID(ctx); err != nil {
 			return err
 		}
 
@@ -263,10 +255,49 @@ func (cpc *CloudProviderConfig) Generate(dependencies asset.Parents) error {
 		vpcSubnets := installConfig.Config.PowerVS.VPCSubnets
 		if vpc == "" {
 			vpc = fmt.Sprintf("vpc-%s", clusterID.InfraID)
+		} else {
+			existingSubnets, err := installConfig.PowerVS.GetVPCSubnets(ctx, vpc)
+			if err != nil {
+				return err
+			}
+
+			// cluster-api-provider-ibm requires any existing VPC subnet to be specified in the cluster
+			// manifest and as such we need to also specify these in the cloudproviderconfig.
+			// @TODO: Deprecate platform.powervs.vpcSubnets?
+			for _, subnet := range existingSubnets {
+				vpcSubnets = append(vpcSubnets, *subnet.Name)
+			}
 		}
 
 		if len(vpcSubnets) == 0 {
-			vpcSubnets = append(vpcSubnets, fmt.Sprintf("vpc-subnet-%s", clusterID.InfraID))
+			if capiutils.IsEnabled(installConfig) {
+				vpcZones, err := powervstypes.AvailableVPCZones(installConfig.Config.PowerVS.Region)
+				if err != nil {
+					return err
+				}
+
+				// The PowerVS CAPI provider generates three subnets.  One for
+				// each of the endpoint.
+				// @TODO the provider should export a function which gives us
+				// an array
+				for _, zone := range vpcZones {
+					vpcSubnets = append(vpcSubnets,
+						fmt.Sprintf("%s-vpcsubnet-%s", clusterID.InfraID, zone))
+				}
+			} else {
+				vpcSubnets = append(vpcSubnets, fmt.Sprintf("vpc-subnet-%s", clusterID.InfraID))
+			}
+		}
+
+		var (
+			serviceGUID string
+			serviceName string
+		)
+
+		if installConfig.Config.PowerVS.ServiceInstanceGUID == "" {
+			serviceName = fmt.Sprintf("%s-power-iaas", clusterID.InfraID)
+		} else {
+			serviceGUID = installConfig.Config.PowerVS.ServiceInstanceGUID
 		}
 
 		powervsConfig, err := powervsmanifests.CloudProviderConfig(
@@ -276,7 +307,8 @@ func (cpc *CloudProviderConfig) Generate(dependencies asset.Parents) error {
 			vpcRegion,
 			installConfig.Config.Platform.PowerVS.PowerVSResourceGroup,
 			vpcSubnets,
-			installConfig.Config.PowerVS.ServiceInstanceID,
+			serviceGUID,
+			serviceName,
 			installConfig.Config.PowerVS.Region,
 			installConfig.Config.PowerVS.Zone,
 		)
@@ -285,7 +317,15 @@ func (cpc *CloudProviderConfig) Generate(dependencies asset.Parents) error {
 		}
 		cm.Data[cloudProviderConfigDataKey] = powervsConfig
 	case vspheretypes.Name:
-		vsphereConfig, err := vspheremanifests.CloudProviderConfigIni(clusterID.InfraID, installConfig.Config.Platform.VSphere)
+		var vsphereConfig string
+		var err error
+		// When we GA multi vcenter, we should only support yaml generation here.
+		if installConfig.Config.EnabledFeatureGates().Enabled(features.FeatureGateVSphereMultiVCenters) {
+			vsphereConfig, err = vspheremanifests.CloudProviderConfigYaml(clusterID.InfraID, installConfig.Config.Platform.VSphere)
+		} else {
+			vsphereConfig, err = vspheremanifests.CloudProviderConfigIni(clusterID.InfraID, installConfig.Config.Platform.VSphere)
+		}
+
 		if err != nil {
 			return errors.Wrap(err, "could not create cloud provider config")
 		}

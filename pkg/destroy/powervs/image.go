@@ -1,12 +1,13 @@
 package powervs
 
 import (
+	"context"
+	"fmt"
 	"math"
 	"strings"
 	"time"
 
 	"github.com/IBM-Cloud/power-go-client/power/models"
-	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -15,6 +16,12 @@ const imageTypeName = "image"
 // listImages lists images in the vpc.
 func (o *ClusterUninstaller) listImages() (cloudResources, error) {
 	o.Logger.Debugf("Listing images")
+
+	if o.imageClient == nil {
+		o.Logger.Infof("Skipping deleting images because no service instance was found")
+		result := []cloudResource{}
+		return cloudResources{}.insert(result...), nil
+	}
 
 	ctx, cancel := o.contextWithTimeout()
 	defer cancel()
@@ -28,7 +35,7 @@ func (o *ClusterUninstaller) listImages() (cloudResources, error) {
 
 	images, err := o.imageClient.GetAll()
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to list images")
+		return nil, fmt.Errorf("failed to list images: %w", err)
 	}
 
 	var foundOne = false
@@ -86,7 +93,7 @@ func (o *ClusterUninstaller) deleteImage(item cloudResource) error {
 
 	err = o.imageClient.Delete(item.id)
 	if err != nil {
-		return errors.Wrapf(err, "failed to delete image %s", item.name)
+		return fmt.Errorf("failed to delete image %s: %w", item.name, err)
 	}
 
 	o.Logger.Infof("Deleted Image %q", item.name)
@@ -128,7 +135,7 @@ func (o *ClusterUninstaller) destroyImages() error {
 			Factor:   1.1,
 			Cap:      leftInContext(ctx),
 			Steps:    math.MaxInt32}
-		err = wait.ExponentialBackoffWithContext(ctx, backoff, func() (bool, error) {
+		err = wait.ExponentialBackoffWithContext(ctx, backoff, func(context.Context) (bool, error) {
 			err2 := o.deleteImage(item)
 			if err2 == nil {
 				return true, err2
@@ -145,7 +152,7 @@ func (o *ClusterUninstaller) destroyImages() error {
 		for _, item := range items {
 			o.Logger.Debugf("destroyImages: found %s in pending items", item.name)
 		}
-		return errors.Errorf("destroyImages: %d undeleted items pending", len(items))
+		return fmt.Errorf("destroyImages: %d undeleted items pending", len(items))
 	}
 
 	backoff := wait.Backoff{
@@ -153,7 +160,7 @@ func (o *ClusterUninstaller) destroyImages() error {
 		Factor:   1.1,
 		Cap:      leftInContext(ctx),
 		Steps:    math.MaxInt32}
-	err = wait.ExponentialBackoffWithContext(ctx, backoff, func() (bool, error) {
+	err = wait.ExponentialBackoffWithContext(ctx, backoff, func(context.Context) (bool, error) {
 		secondPassList, err2 := o.listImages()
 		if err2 != nil {
 			return false, err2

@@ -10,9 +10,10 @@ import (
 	"github.com/pborman/uuid"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	resourcemanager "google.golang.org/api/cloudresourcemanager/v1"
+	resourcemanager "google.golang.org/api/cloudresourcemanager/v3"
 	"google.golang.org/api/compute/v1"
 	"google.golang.org/api/dns/v1"
+	"google.golang.org/api/file/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iam/v1"
 	"google.golang.org/api/option"
@@ -21,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	gcpconfig "github.com/openshift/installer/pkg/asset/installconfig/gcp"
+	gcpconsts "github.com/openshift/installer/pkg/constants/gcp"
 	"github.com/openshift/installer/pkg/destroy/providers"
 	"github.com/openshift/installer/pkg/types"
 	gcptypes "github.com/openshift/installer/pkg/types/gcp"
@@ -29,22 +31,40 @@ import (
 
 var (
 	defaultTimeout = 2 * time.Minute
+	longTimeout    = 10 * time.Minute
+)
+
+type resourceScope string
+
+const (
+	// capgProviderOwnedLabelFmt is the format string for the label
+	// used for resources created by the Cluster API GCP provider.
+	capgProviderOwnedLabelFmt = "capg-cluster-%s"
+
+	// gcpGlobalResource is an identifier to indicate that the resource(s)
+	// that are being deleted are globally scoped.
+	gcpGlobalResource resourceScope = "global"
+
+	// gcpRegionalResource is an identifier to indicate that the resource(s)
+	// that are being deleted are regionally scoped.
+	gcpRegionalResource resourceScope = "regional"
 )
 
 // ClusterUninstaller holds the various options for the cluster we want to delete
 type ClusterUninstaller struct {
-	Logger           logrus.FieldLogger
-	Region           string
-	ProjectID        string
-	NetworkProjectID string
-	ClusterID        string
-	Context          context.Context
+	Logger            logrus.FieldLogger
+	Region            string
+	ProjectID         string
+	NetworkProjectID  string
+	PrivateZoneDomain string
+	ClusterID         string
 
 	computeSvc *compute.Service
 	iamSvc     *iam.Service
 	dnsSvc     *dns.Service
 	storageSvc *storage.Service
 	rmSvc      *resourcemanager.Service
+	fileSvc    *file.Service
 
 	// cpusByMachineType caches the number of CPUs per machine type, used in quota
 	// calculations on deletion
@@ -67,8 +87,8 @@ func New(logger logrus.FieldLogger, metadata *types.ClusterMetadata) (providers.
 		Region:             metadata.ClusterPlatformMetadata.GCP.Region,
 		ProjectID:          metadata.ClusterPlatformMetadata.GCP.ProjectID,
 		NetworkProjectID:   metadata.ClusterPlatformMetadata.GCP.NetworkProjectID,
+		PrivateZoneDomain:  metadata.ClusterPlatformMetadata.GCP.PrivateZoneDomain,
 		ClusterID:          metadata.InfraID,
-		Context:            context.Background(),
 		cloudControllerUID: gcptypes.CloudControllerUID(metadata.InfraID),
 		requestIDTracker:   newRequestIDTracker(),
 		pendingItemTracker: newPendingItemTracker(),
@@ -77,9 +97,7 @@ func New(logger logrus.FieldLogger, metadata *types.ClusterMetadata) (providers.
 
 // Run is the entrypoint to start the uninstall process
 func (o *ClusterUninstaller) Run() (*types.ClusterQuota, error) {
-	ctx, cancel := o.contextWithTimeout()
-	defer cancel()
-
+	ctx := context.Background()
 	ssn, err := gcpconfig.GetSession(ctx)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get session")
@@ -95,9 +113,12 @@ func (o *ClusterUninstaller) Run() (*types.ClusterQuota, error) {
 		return nil, errors.Wrap(err, "failed to create compute service")
 	}
 
+	cctx, cancel := context.WithTimeout(ctx, longTimeout)
+	defer cancel()
+
 	o.cpusByMachineType = map[string]int64{}
 	req := o.computeSvc.MachineTypes.AggregatedList(o.ProjectID).Fields("items/*/machineTypes(name,guestCpus),nextPageToken")
-	if err := req.Pages(o.Context, func(list *compute.MachineTypeAggregatedList) error {
+	if err := req.Pages(cctx, func(list *compute.MachineTypeAggregatedList) error {
 		for _, scopedList := range list.Items {
 			for _, item := range scopedList.MachineTypes {
 				o.cpusByMachineType[item.Name] = item.GuestCpus
@@ -128,6 +149,11 @@ func (o *ClusterUninstaller) Run() (*types.ClusterQuota, error) {
 		return nil, errors.Wrap(err, "failed to create resourcemanager service")
 	}
 
+	o.fileSvc, err = file.NewService(ctx, options...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create filestore service: %w", err)
+	}
+
 	err = wait.PollImmediateInfinite(
 		time.Second*10,
 		o.destroyCluster,
@@ -143,7 +169,7 @@ func (o *ClusterUninstaller) Run() (*types.ClusterQuota, error) {
 func (o *ClusterUninstaller) destroyCluster() (bool, error) {
 	stagedFuncs := [][]struct {
 		name    string
-		execute func() error
+		execute func(ctx context.Context) error
 	}{{
 		{name: "Stop instances", execute: o.stopInstances},
 	}, {
@@ -158,21 +184,27 @@ func (o *ClusterUninstaller) destroyCluster() (bool, error) {
 		{name: "Routes", execute: o.destroyRoutes},
 		{name: "Firewalls", execute: o.destroyFirewalls},
 		{name: "Addresses", execute: o.destroyAddresses},
+		{name: "Forwarding rules", execute: o.destroyForwardingRules},
 		{name: "Target Pools", execute: o.destroyTargetPools},
 		{name: "Instance groups", execute: o.destroyInstanceGroups},
-		{name: "Forwarding rules", execute: o.destroyForwardingRules},
+		{name: "Target TCP Proxies", execute: o.destroyTargetTCPProxies},
 		{name: "Backend services", execute: o.destroyBackendServices},
 		{name: "Health checks", execute: o.destroyHealthChecks},
 		{name: "HTTP Health checks", execute: o.destroyHTTPHealthChecks},
 		{name: "Routers", execute: o.destroyRouters},
 		{name: "Subnetworks", execute: o.destroySubnetworks},
 		{name: "Networks", execute: o.destroyNetworks},
+		{name: "Filestores", execute: o.destroyFilestores},
 	}}
+
+	// create the main Context, so all stages can accept and make context children
+	ctx := context.Background()
+
 	done := true
 	for _, stage := range stagedFuncs {
 		if done {
 			for _, f := range stage {
-				err := f.execute()
+				err := f.execute(ctx)
 				if err != nil {
 					o.Logger.Debugf("%s: %v", f.name, err)
 					done = false
@@ -209,7 +241,7 @@ func getRegionFromZone(zoneName string) string {
 // projects/project/zones/zone/diskTypes/pd-standard -> "ssd_total_storage"
 func getDiskLimit(typeURL string) string {
 	switch getNameFromURL("diskTypes", typeURL) {
-	case "pd-ssd":
+	case "pd-balanced", "pd-ssd", "hyperdisk-balanced":
 		return "ssd_total_storage"
 	case "pd-standard":
 		return "disks_total_storage"
@@ -227,11 +259,24 @@ func (o *ClusterUninstaller) clusterIDFilter() string {
 }
 
 func (o *ClusterUninstaller) clusterLabelFilter() string {
-	return fmt.Sprintf("labels.kubernetes-io-cluster-%s = \"owned\"", o.ClusterID)
+	return fmt.Sprintf("(labels.%s = \"owned\") OR (labels.%s = \"owned\")",
+		fmt.Sprintf(gcpconsts.ClusterIDLabelFmt, o.ClusterID), fmt.Sprintf(capgProviderOwnedLabelFmt, o.ClusterID))
 }
 
 func (o *ClusterUninstaller) clusterLabelOrClusterIDFilter() string {
 	return fmt.Sprintf("(%s) OR (%s)", o.clusterIDFilter(), o.clusterLabelFilter())
+}
+
+func isForbidden(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ae *googleapi.Error
+	if errors.As(err, &ae) {
+		return ae.Code == http.StatusForbidden
+	}
+
+	return false
 }
 
 func isNoOp(err error) bool {
@@ -253,10 +298,6 @@ func aggregateError(errs []error, pending ...int) error {
 		return errors.Errorf("%d items pending", pending[0])
 	}
 	return nil
-}
-
-func (o *ClusterUninstaller) contextWithTimeout() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(o.Context, defaultTimeout)
 }
 
 // requestIDTracker keeps track of a set of request IDs mapped to a unique resource

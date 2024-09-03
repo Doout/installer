@@ -187,6 +187,14 @@ func DataSourceIBMPIInstance() *schema.Resource {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
+			Attr_PIInstanceSharedProcessorPool: {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+			Attr_PIInstanceSharedProcessorPoolID: {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
 		},
 	}
 }
@@ -232,11 +240,12 @@ func dataSourceIBMPIInstancesRead(ctx context.Context, d *schema.ResourceData, m
 	if *powervmdata.PlacementGroup != "none" {
 		d.Set(PIPlacementGroupID, powervmdata.PlacementGroup)
 	}
+	d.Set(Attr_PIInstanceSharedProcessorPool, powervmdata.SharedProcessorPool)
+	d.Set(Attr_PIInstanceSharedProcessorPoolID, powervmdata.SharedProcessorPoolID)
 
 	if powervmdata.Addresses != nil {
 		pvmaddress := make([]map[string]interface{}, len(powervmdata.Addresses))
 		for i, pvmip := range powervmdata.Addresses {
-
 			p := make(map[string]interface{})
 			p["ip"] = pvmip.IPAddress
 			p["network_name"] = pvmip.NetworkName
@@ -247,13 +256,10 @@ func dataSourceIBMPIInstancesRead(ctx context.Context, d *schema.ResourceData, m
 			pvmaddress[i] = p
 		}
 		d.Set("addresses", pvmaddress)
-
 	}
 
 	if powervmdata.Health != nil {
-
 		d.Set("health_status", powervmdata.Health.Status)
-
 	}
 
 	return nil

@@ -13,6 +13,7 @@ import (
 	"github.com/openshift/installer/pkg/asset/installconfig/ibmcloud/mock"
 	"github.com/openshift/installer/pkg/asset/installconfig/ibmcloud/responses"
 	"github.com/openshift/installer/pkg/types"
+	ibmcloudtypes "github.com/openshift/installer/pkg/types/ibmcloud"
 )
 
 type editMetadata []func(m *Metadata)
@@ -170,7 +171,19 @@ var (
 )
 
 func baseMetadata() *Metadata {
-	return NewMetadata(goodDomain, region, nil, nil)
+	return NewMetadata(&types.InstallConfig{
+		BaseDomain: goodDomain,
+		Platform: types.Platform{
+			IBMCloud: &ibmcloudtypes.Platform{
+				Region: region,
+			},
+		},
+		Publish: types.ExternalPublishingStrategy,
+	})
+}
+
+func setInternalPublishingStrategy(m *Metadata) {
+	m.publishStrategy = types.InternalPublishingStrategy
 }
 
 func TestAccountID(t *testing.T) {
@@ -398,6 +411,7 @@ func TestDNSInstance(t *testing.T) {
 	for _, tCase := range testCases {
 		t.Run(tCase.name, func(t *testing.T) {
 			metadata := baseMetadata()
+			setInternalPublishingStrategy(metadata)
 			metadata.client = ibmcloudClient
 			for _, edit := range tCase.edits {
 				edit(metadata)
@@ -430,6 +444,7 @@ func TestSetDNSInstance(t *testing.T) {
 	for _, tCase := range testCases {
 		t.Run(tCase.name, func(t *testing.T) {
 			metadata := baseMetadata()
+			setInternalPublishingStrategy(metadata)
 
 			metadata.dnsInstance = &DNSInstance{
 				ID:  tCase.dnsID,

@@ -109,8 +109,16 @@ func ResourceIBMSatelliteClusterWorkerPool() *schema.Resource {
 				Computed: true,
 			},
 			"entitlement": {
-				Type:     schema.TypeString,
-				Optional: true,
+				Type:             schema.TypeString,
+				Optional:         true,
+				DiffSuppressFunc: flex.ApplyOnce,
+				Description:      "Entitlement option reduces additional OCP Licence cost in Openshift Clusters",
+			},
+			"operating_system": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Optional:    true,
+				Description: "Operating system of the worker pool. Options are REDHAT_7_64, REDHAT_8_64, or RHCOS.",
 			},
 			"worker_count": {
 				Type:        schema.TypeInt,
@@ -144,6 +152,7 @@ func ResourceIBMSatelliteClusterWorkerPool() *schema.Resource {
 				Type:        schema.TypeSet,
 				Optional:    true,
 				Computed:    true,
+				ForceNew:    true,
 				Elem:        &schema.Schema{Type: schema.TypeString},
 				Set:         flex.ResourceIBMVPCHash,
 				Description: "Labels that describe a Satellite host",
@@ -205,6 +214,11 @@ func resourceIBMSatelliteClusterWorkerPoolCreate(d *schema.ResourceData, meta in
 		createWorkerPoolOptions.Headers = pathParamsMap
 	}
 
+	if v, ok := d.GetOk("operating_system"); ok {
+		operating_system := v.(string)
+		createWorkerPoolOptions.OperatingSystem = &operating_system
+	}
+
 	if v, ok := d.GetOk("worker_count"); ok {
 		workerCount := int64(v.(int))
 		createWorkerPoolOptions.WorkerCount = &workerCount
@@ -247,6 +261,11 @@ func resourceIBMSatelliteClusterWorkerPoolCreate(d *schema.ResourceData, meta in
 	if v, ok := d.GetOk("isolation"); ok {
 		isolation := v.(string)
 		createWorkerPoolOptions.Isolation = &isolation
+	}
+
+	if v, ok := d.GetOk("entitlement"); ok {
+		entitlement := v.(string)
+		createWorkerPoolOptions.Entitlement = &entitlement
 	}
 
 	instance, response, err := satClient.CreateSatelliteWorkerPool(createWorkerPoolOptions)
@@ -296,6 +315,7 @@ func resourceIBMSatelliteClusterWorkerPoolRead(d *schema.ResourceData, meta inte
 	d.Set("cluster", clusterID)
 	d.Set("flavor", workerPool.Flavor)
 	d.Set("isolation", workerPool.Isolation)
+	d.Set("operating_system", workerPool.OperatingSystem)
 	d.Set("worker_count", workerPool.WorkerCount)
 	d.Set("worker_pool_labels", flex.IgnoreSystemLabels(workerPool.Labels))
 	d.Set("host_labels", flex.FlattenWorkerPoolHostLabels(workerPool.HostLabels))

@@ -1,12 +1,13 @@
 package bootstrap
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
-	"github.com/ghodss/yaml"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/yaml"
 
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/installer/pkg/asset"
@@ -41,7 +42,7 @@ func (a *CVOIgnore) Dependencies() []asset.Asset {
 }
 
 // Generate generates the respective operator config.yml files
-func (a *CVOIgnore) Generate(dependencies asset.Parents) error {
+func (a *CVOIgnore) Generate(_ context.Context, dependencies asset.Parents) error {
 	operators := &manifests.Manifests{}
 	openshiftManifests := &manifests.Openshift{}
 	dependencies.Get(operators, openshiftManifests)

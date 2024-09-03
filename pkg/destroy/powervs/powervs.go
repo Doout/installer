@@ -2,6 +2,7 @@ package powervs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	gohttp "net/http"
@@ -9,26 +10,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/IBM-Cloud/bluemix-go"
-	"github.com/IBM-Cloud/bluemix-go/api/resource/resourcev2/controllerv2"
-	"github.com/IBM-Cloud/bluemix-go/authentication"
 	"github.com/IBM-Cloud/bluemix-go/crn"
-	"github.com/IBM-Cloud/bluemix-go/http"
-	"github.com/IBM-Cloud/bluemix-go/models"
-	"github.com/IBM-Cloud/bluemix-go/rest"
-	bxsession "github.com/IBM-Cloud/bluemix-go/session"
 	"github.com/IBM-Cloud/power-go-client/clients/instance"
 	"github.com/IBM-Cloud/power-go-client/ibmpisession"
 	"github.com/IBM/go-sdk-core/v5/core"
 	"github.com/IBM/networking-go-sdk/dnsrecordsv1"
 	"github.com/IBM/networking-go-sdk/dnszonesv1"
 	"github.com/IBM/networking-go-sdk/resourcerecordsv1"
+	"github.com/IBM/networking-go-sdk/transitgatewayapisv1"
 	"github.com/IBM/networking-go-sdk/zonesv1"
 	"github.com/IBM/platform-services-go-sdk/resourcecontrollerv2"
 	"github.com/IBM/platform-services-go-sdk/resourcemanagerv2"
 	"github.com/IBM/vpc-go-sdk/vpcv1"
-	"github.com/golang-jwt/jwt"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -57,6 +50,9 @@ func leftInContext(ctx context.Context) time.Duration {
 }
 
 const (
+	// resource Id for Power Systems Virtual Server in the Global catalog.
+	powerIAASResourceID = "abd259f0-9990-11e8-acc8-b9f54a8f1661"
+
 	// cisServiceID is the Cloud Internet Services' catalog service ID.
 	cisServiceID = "75874a60-cb12-11e7-948e-37ac098eb1b9"
 )
@@ -69,72 +65,6 @@ type User struct {
 	cloudName  string `default:"bluemix"`
 	cloudType  string `default:"public"`
 	generation int    `default:"2"`
-}
-
-func fetchUserDetails(bxSession *bxsession.Session, generation int) (*User, error) {
-	config := bxSession.Config
-	user := User{}
-	var bluemixToken string
-
-	if strings.HasPrefix(config.IAMAccessToken, "Bearer") {
-		bluemixToken = config.IAMAccessToken[7:len(config.IAMAccessToken)]
-	} else {
-		bluemixToken = config.IAMAccessToken
-	}
-
-	token, err := jwt.Parse(bluemixToken, func(token *jwt.Token) (interface{}, error) {
-		return "", nil
-	})
-	if err != nil && !strings.Contains(err.Error(), "key is of invalid type") {
-		return &user, err
-	}
-
-	claims := token.Claims.(jwt.MapClaims)
-	if email, ok := claims["email"]; ok {
-		user.Email = email.(string)
-	}
-	user.ID = claims["id"].(string)
-	user.Account = claims["account"].(map[string]interface{})["bss"].(string)
-	iss := claims["iss"].(string)
-	if strings.Contains(iss, "https://iam.cloud.ibm.com") {
-		user.cloudName = "bluemix"
-	} else {
-		user.cloudName = "staging"
-	}
-	user.cloudType = "public"
-
-	user.generation = generation
-	return &user, nil
-}
-
-// GetRegion converts from a zone into a region.
-func GetRegion(zone string) (region string, err error) {
-	err = nil
-	switch {
-	case strings.HasPrefix(zone, "dal"), strings.HasPrefix(zone, "us-south"):
-		region = "us-south"
-	case strings.HasPrefix(zone, "sao"):
-		region = "sao"
-	case strings.HasPrefix(zone, "us-east"):
-		region = "us-east"
-	case strings.HasPrefix(zone, "tor"):
-		region = "tor"
-	case strings.HasPrefix(zone, "eu-de-"):
-		region = "eu-de"
-	case strings.HasPrefix(zone, "lon"):
-		region = "lon"
-	case strings.HasPrefix(zone, "syd"):
-		region = "syd"
-	case strings.HasPrefix(zone, "tok"):
-		region = "tok"
-	case strings.HasPrefix(zone, "osa"):
-		region = "osa"
-	case strings.HasPrefix(zone, "mon"):
-		region = "mon"
-	default:
-		return "", fmt.Errorf("region not found for the zone: %s", zone)
-	}
-	return
 }
 
 // ClusterUninstaller holds the various options for the cluster we want to delete.
@@ -153,20 +83,21 @@ type ClusterUninstaller struct {
 	VPCRegion      string
 	Zone           string
 
-	managementSvc         *resourcemanagerv2.ResourceManagerV2
-	controllerSvc         *resourcecontrollerv2.ResourceControllerV2
-	vpcSvc                *vpcv1.VpcV1
-	zonesSvc              *zonesv1.ZonesV1
-	dnsRecordsSvc         *dnsrecordsv1.DnsRecordsV1
-	dnsZonesSvc           *dnszonesv1.DnsZonesV1
-	resourceRecordsSvc    *resourcerecordsv1.ResourceRecordsV1
-	piSession             *ibmpisession.IBMPISession
-	instanceClient        *instance.IBMPIInstanceClient
-	imageClient           *instance.IBMPIImageClient
-	jobClient             *instance.IBMPIJobClient
-	keyClient             *instance.IBMPIKeyClient
-	cloudConnectionClient *instance.IBMPICloudConnectionClient
-	dhcpClient            *instance.IBMPIDhcpClient
+	managementSvc      *resourcemanagerv2.ResourceManagerV2
+	controllerSvc      *resourcecontrollerv2.ResourceControllerV2
+	vpcSvc             *vpcv1.VpcV1
+	zonesSvc           *zonesv1.ZonesV1
+	dnsRecordsSvc      *dnsrecordsv1.DnsRecordsV1
+	dnsZonesSvc        *dnszonesv1.DnsZonesV1
+	resourceRecordsSvc *resourcerecordsv1.ResourceRecordsV1
+	piSession          *ibmpisession.IBMPISession
+	instanceClient     *instance.IBMPIInstanceClient
+	imageClient        *instance.IBMPIImageClient
+	jobClient          *instance.IBMPIJobClient
+	keyClient          *instance.IBMPIKeyClient
+	dhcpClient         *instance.IBMPIDhcpClient
+	networkClient      *instance.IBMPINetworkClient
+	tgClient           *transitgatewayapisv1.TransitGatewayApisV1
 
 	resourceGroupID string
 	cosInstanceID   string
@@ -184,7 +115,8 @@ func New(logger logrus.FieldLogger, metadata *types.ClusterMetadata) (providers.
 		err      error
 	)
 
-	bxClient, err = powervs.NewBxClient()
+	// We need to prompt for missing variables because NewPISession requires them!
+	bxClient, err = powervs.NewBxClient(true)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +139,7 @@ func New(logger logrus.FieldLogger, metadata *types.ClusterMetadata) (providers.
 	if metadata.ClusterPlatformMetadata.PowerVS.VPCRegion == "" {
 		var derivedVPCRegion string
 		if derivedVPCRegion, err = powervstypes.VPCRegionForPowerVSRegion(metadata.ClusterPlatformMetadata.PowerVS.Region); err != nil {
-			return nil, errors.Wrap(err, "powervs.New failed to derive VPCRegion")
+			return nil, fmt.Errorf("powervs.New failed to derive VPCRegion: %w", err)
 		}
 		logger.Debugf("powervs.New: PowerVS.VPCRegion is missing, derived VPCRegion = %v", derivedVPCRegion)
 		metadata.ClusterPlatformMetadata.PowerVS.VPCRegion = derivedVPCRegion
@@ -223,11 +155,11 @@ func New(logger logrus.FieldLogger, metadata *types.ClusterMetadata) (providers.
 		CISInstanceCRN:     metadata.ClusterPlatformMetadata.PowerVS.CISInstanceCRN,
 		DNSInstanceCRN:     metadata.ClusterPlatformMetadata.PowerVS.DNSInstanceCRN,
 		Region:             metadata.ClusterPlatformMetadata.PowerVS.Region,
-		ServiceGUID:        metadata.ClusterPlatformMetadata.PowerVS.ServiceInstanceGUID,
 		VPCRegion:          metadata.ClusterPlatformMetadata.PowerVS.VPCRegion,
 		Zone:               metadata.ClusterPlatformMetadata.PowerVS.Zone,
 		pendingItemTracker: newPendingItemTracker(),
 		resourceGroupID:    metadata.ClusterPlatformMetadata.PowerVS.PowerVSResourceGroup,
+		ServiceGUID:        metadata.ClusterPlatformMetadata.PowerVS.ServiceInstanceGUID,
 	}, nil
 }
 
@@ -244,12 +176,12 @@ func (o *ClusterUninstaller) Run() (*types.ClusterQuota, error) {
 	defer cancel()
 
 	if ctx == nil {
-		return nil, errors.Wrap(err, "powervs.Run: contextWithTimeout returns nil")
+		return nil, fmt.Errorf("powervs.Run: contextWithTimeout returns nil: %w", err)
 	}
 
 	deadline, ok = ctx.Deadline()
 	if !ok {
-		return nil, errors.Wrap(err, "powervs.Run: failed to call ctx.Deadline")
+		return nil, fmt.Errorf("powervs.Run: failed to call ctx.Deadline: %w", err)
 	}
 
 	var duration time.Duration = deadline.Sub(time.Now())
@@ -285,7 +217,7 @@ func (o *ClusterUninstaller) PolledRun() (bool, error) {
 	err = o.destroyCluster()
 	if err != nil {
 		o.Logger.Debugf("powervs.PolledRun: Failed destroyCluster")
-		return false, errors.Wrap(err, "failed to destroy cluster")
+		return false, fmt.Errorf("failed to destroy cluster: %w", err)
 	}
 
 	return true, nil
@@ -296,20 +228,21 @@ func (o *ClusterUninstaller) destroyCluster() error {
 		name    string
 		execute func() error
 	}{{
+		{name: "Transit Gateways", execute: o.destroyTransitGateways},
+	}, {
 		{name: "Cloud Instances", execute: o.destroyCloudInstances},
 	}, {
 		{name: "Power Instances", execute: o.destroyPowerInstances},
 	}, {
 		{name: "Load Balancers", execute: o.destroyLoadBalancers},
 	}, {
-		{name: "Subnets", execute: o.destroySubnets},
+		{name: "Cloud Subnets", execute: o.destroyCloudSubnets},
 	}, {
 		{name: "Public Gateways", execute: o.destroyPublicGateways},
 	}, {
 		{name: "DHCPs", execute: o.destroyDHCPNetworks},
 	}, {
-		{name: "Cloud Connections", execute: o.destroyCloudConnections},
-	}, {
+		{name: "Power Subnets", execute: o.destroyPowerSubnets},
 		{name: "Images", execute: o.destroyImages},
 		{name: "VPCs", execute: o.destroyVPCs},
 	}, {
@@ -321,6 +254,8 @@ func (o *ClusterUninstaller) destroyCluster() error {
 	}, {
 		{name: "DNS Records", execute: o.destroyDNSRecords},
 		{name: "DNS Resource Records", execute: o.destroyResourceRecords},
+	}, {
+		{name: "Service Instances", execute: o.destroyServiceInstances},
 	}}
 
 	for _, stage := range stagedFuncs {
@@ -375,12 +310,12 @@ func (o *ClusterUninstaller) executeStageFunction(f struct {
 	defer cancel()
 
 	if ctx == nil {
-		return errors.Wrap(err, "executeStageFunction contextWithTimeout returns nil")
+		return fmt.Errorf("executeStageFunction contextWithTimeout returns nil: %w", err)
 	}
 
 	deadline, ok = ctx.Deadline()
 	if !ok {
-		return errors.Wrap(err, "executeStageFunction failed to call ctx.Deadline")
+		return fmt.Errorf("executeStageFunction failed to call ctx.Deadline: %w", err)
 	}
 
 	var duration time.Duration = deadline.Sub(time.Now())
@@ -414,30 +349,44 @@ func (o *ClusterUninstaller) executeStageFunction(f struct {
 	return nil
 }
 
+func (o *ClusterUninstaller) newAuthenticator(apikey string) (core.Authenticator, error) {
+	var (
+		authenticator core.Authenticator
+		err           error
+	)
+
+	if apikey == "" {
+		return nil, errors.New("newAuthenticator: apikey is empty")
+	}
+
+	authenticator = &core.IamAuthenticator{
+		ApiKey: apikey,
+	}
+
+	err = authenticator.Validate()
+	if err != nil {
+		return nil, fmt.Errorf("newAuthenticator: authenticator.Validate: %w", err)
+	}
+
+	return authenticator, nil
+}
+
 func (o *ClusterUninstaller) loadSDKServices() error {
 	var (
-		bxSession             *bxsession.Session
-		tokenProviderEndpoint = "https://iam.cloud.ibm.com" //nolint:gosec // not a credential despite `token` in its name
-		tokenRefresher        *authentication.IAMAuthRepository
-		err                   error
-		ctrlv2                controllerv2.ResourceControllerAPIV2
-		resourceClientV2      controllerv2.ResourceServiceInstanceRepository
-		serviceInstance       models.ServiceInstanceV2
+		err           error
+		authenticator core.Authenticator
+		versionDate   = "2023-07-04"
+		tgOptions     *transitgatewayapisv1.TransitGatewayApisV1Options
+		serviceName   string
 	)
 
 	defer func() {
-		o.Logger.Debugf("loadSDKServices: bxSession = %v", bxSession)
-		o.Logger.Debugf("loadSDKServices: tokenRefresher = %v", tokenRefresher)
-		o.Logger.Debugf("loadSDKServices: ctrlv2 = %v", ctrlv2)
-		o.Logger.Debugf("loadSDKServices: resourceClientV2 = %v", resourceClientV2)
 		o.Logger.Debugf("loadSDKServices: o.ServiceGUID = %v", o.ServiceGUID)
-		o.Logger.Debugf("loadSDKServices: serviceInstance = %v", serviceInstance)
 		o.Logger.Debugf("loadSDKServices: o.piSession = %v", o.piSession)
 		o.Logger.Debugf("loadSDKServices: o.instanceClient = %v", o.instanceClient)
 		o.Logger.Debugf("loadSDKServices: o.imageClient = %v", o.imageClient)
 		o.Logger.Debugf("loadSDKServices: o.jobClient = %v", o.jobClient)
 		o.Logger.Debugf("loadSDKServices: o.keyClient = %v", o.keyClient)
-		o.Logger.Debugf("loadSDKServices: o.cloudConnectionClient = %v", o.cloudConnectionClient)
 		o.Logger.Debugf("loadSDKServices: o.vpcSvc = %v", o.vpcSvc)
 		o.Logger.Debugf("loadSDKServices: o.managementSvc = %v", o.managementSvc)
 		o.Logger.Debugf("loadSDKServices: o.controllerSvc = %v", o.controllerSvc)
@@ -447,114 +396,34 @@ func (o *ClusterUninstaller) loadSDKServices() error {
 		return fmt.Errorf("loadSDKServices: missing APIKey in metadata.json")
 	}
 
-	bxSession, err = bxsession.New(&bluemix.Config{
-		BluemixAPIKey:         o.APIKey,
-		TokenProviderEndpoint: &tokenProviderEndpoint,
-		Debug:                 false,
-	})
+	user, err := powervs.FetchUserDetails(o.APIKey)
 	if err != nil {
-		return fmt.Errorf("loadSDKServices: bxsession.New: %v", err)
+		return fmt.Errorf("loadSDKServices: fetchUserDetails: %w", err)
 	}
 
-	tokenRefresher, err = authentication.NewIAMAuthRepository(bxSession.Config, &rest.Client{
-		DefaultHeader: gohttp.Header{
-			"User-Agent": []string{http.UserAgent()},
-		},
-	})
+	authenticator, err = o.newAuthenticator(o.APIKey)
 	if err != nil {
-		return fmt.Errorf("loadSDKServices: authentication.NewIAMAuthRepository: %v", err)
-	}
-	err = tokenRefresher.AuthenticateAPIKey(bxSession.Config.BluemixAPIKey)
-	if err != nil {
-		return fmt.Errorf("loadSDKServices: tokenRefresher.AuthenticateAPIKey: %v", err)
-	}
-
-	user, err := fetchUserDetails(bxSession, 2)
-	if err != nil {
-		return fmt.Errorf("loadSDKServices: fetchUserDetails: %v", err)
-	}
-
-	ctrlv2, err = controllerv2.New(bxSession)
-	if err != nil {
-		return fmt.Errorf("loadSDKServices: controllerv2.New: %v", err)
-	}
-
-	resourceClientV2 = ctrlv2.ResourceServiceInstanceV2()
-	if err != nil {
-		return fmt.Errorf("loadSDKServices: ctrlv2.ResourceServiceInstanceV2: %v", err)
-	}
-
-	if o.ServiceGUID == "" {
-		return fmt.Errorf("loadSDKServices: ServiceGUID is empty")
-	}
-	o.Logger.Debugf("loadSDKServices: o.ServiceGUID = %v", o.ServiceGUID)
-
-	serviceInstance, err = resourceClientV2.GetInstance(o.ServiceGUID)
-	if err != nil {
-		return fmt.Errorf("loadSDKServices: resourceClientV2.GetInstance: %v", err)
-	}
-
-	var authenticator core.Authenticator = &core.IamAuthenticator{
-		ApiKey: o.APIKey,
-	}
-
-	err = authenticator.Validate()
-	if err != nil {
-		return fmt.Errorf("loadSDKServices: loadSDKServices: authenticator.Validate: %v", err)
+		return err
 	}
 
 	var options *ibmpisession.IBMPIOptions = &ibmpisession.IBMPIOptions{
 		Authenticator: authenticator,
 		Debug:         false,
 		UserAccount:   user.Account,
-		Zone:          serviceInstance.RegionID,
+		Zone:          o.Zone,
 	}
 
 	o.piSession, err = ibmpisession.NewIBMPISession(options)
 	if (err != nil) || (o.piSession == nil) {
 		if err != nil {
-			return fmt.Errorf("loadSDKServices: ibmpisession.New: %v", err)
+			return fmt.Errorf("loadSDKServices: ibmpisession.New: %w", err)
 		}
-		return fmt.Errorf("loadSDKServices: loadSDKServices: o.piSession is nil")
+		return fmt.Errorf("loadSDKServices: o.piSession is nil")
 	}
 
-	o.instanceClient = instance.NewIBMPIInstanceClient(context.Background(), o.piSession, o.ServiceGUID)
-	if o.instanceClient == nil {
-		return fmt.Errorf("loadSDKServices: loadSDKServices: o.instanceClient is nil")
-	}
-
-	o.imageClient = instance.NewIBMPIImageClient(context.Background(), o.piSession, o.ServiceGUID)
-	if o.imageClient == nil {
-		return fmt.Errorf("loadSDKServices: loadSDKServices: o.imageClient is nil")
-	}
-
-	o.jobClient = instance.NewIBMPIJobClient(context.Background(), o.piSession, o.ServiceGUID)
-	if o.jobClient == nil {
-		return fmt.Errorf("loadSDKServices: loadSDKServices: o.jobClient is nil")
-	}
-
-	o.keyClient = instance.NewIBMPIKeyClient(context.Background(), o.piSession, o.ServiceGUID)
-	if o.keyClient == nil {
-		return fmt.Errorf("loadSDKServices: loadSDKServices: o.keyClient is nil")
-	}
-
-	o.cloudConnectionClient = instance.NewIBMPICloudConnectionClient(context.Background(), o.piSession, o.ServiceGUID)
-	if o.cloudConnectionClient == nil {
-		return fmt.Errorf("loadSDKServices: loadSDKServices: o.cloudConnectionClient is nil")
-	}
-
-	o.dhcpClient = instance.NewIBMPIDhcpClient(context.Background(), o.piSession, o.ServiceGUID)
-	if o.dhcpClient == nil {
-		return fmt.Errorf("loadSDKServices: loadSDKServices: o.dhcpClient is nil")
-	}
-
-	authenticator = &core.IamAuthenticator{
-		ApiKey: o.APIKey,
-	}
-
-	err = authenticator.Validate()
+	authenticator, err = o.newAuthenticator(o.APIKey)
 	if err != nil {
-		return fmt.Errorf("loadSDKServices: loadSDKServices: authenticator.Validate: %v", err)
+		return err
 	}
 
 	// https://raw.githubusercontent.com/IBM/vpc-go-sdk/master/vpcv1/vpc_v1.go
@@ -563,18 +432,15 @@ func (o *ClusterUninstaller) loadSDKServices() error {
 		URL:           "https://" + o.VPCRegion + ".iaas.cloud.ibm.com/v1",
 	})
 	if err != nil {
-		return fmt.Errorf("loadSDKServices: loadSDKServices: vpcv1.NewVpcV1: %v", err)
+		return fmt.Errorf("loadSDKServices: vpcv1.NewVpcV1: %w", err)
 	}
 
 	userAgentString := fmt.Sprintf("OpenShift/4.x Destroyer/%s", version.Raw)
 	o.vpcSvc.Service.SetUserAgent(userAgentString)
 
-	authenticator = &core.IamAuthenticator{
-		ApiKey: o.APIKey,
-	}
-
-	err = authenticator.Validate()
+	authenticator, err = o.newAuthenticator(o.APIKey)
 	if err != nil {
+		return err
 	}
 
 	// Instantiate the service with an API key based IAM authenticator
@@ -582,15 +448,12 @@ func (o *ClusterUninstaller) loadSDKServices() error {
 		Authenticator: authenticator,
 	})
 	if err != nil {
-		return fmt.Errorf("loadSDKServices: loadSDKServices: creating ResourceManagerV2 Service: %v", err)
+		return fmt.Errorf("loadSDKServices: creating ResourceManagerV2 Service: %w", err)
 	}
 
-	authenticator = &core.IamAuthenticator{
-		ApiKey: o.APIKey,
-	}
-
-	err = authenticator.Validate()
+	authenticator, err = o.newAuthenticator(o.APIKey)
 	if err != nil {
+		return err
 	}
 
 	// Instantiate the service with an API key based IAM authenticator
@@ -600,18 +463,30 @@ func (o *ClusterUninstaller) loadSDKServices() error {
 		URL:           "https://resource-controller.cloud.ibm.com",
 	})
 	if err != nil {
-		return fmt.Errorf("loadSDKServices: loadSDKServices: creating ControllerV2 Service: %v", err)
+		return fmt.Errorf("loadSDKServices: creating ControllerV2 Service: %w", err)
+	}
+
+	authenticator, err = o.newAuthenticator(o.APIKey)
+	if err != nil {
+		return err
+	}
+
+	tgOptions = &transitgatewayapisv1.TransitGatewayApisV1Options{
+		Authenticator: authenticator,
+		Version:       &versionDate,
+	}
+
+	o.tgClient, err = transitgatewayapisv1.NewTransitGatewayApisV1(tgOptions)
+	if err != nil {
+		return fmt.Errorf("loadSDKServices: NewTransitGatewayApisV1: %w", err)
 	}
 
 	// Either CISInstanceCRN is set or DNSInstanceCRN is set. Both should not be set at the same time,
 	// but check both just to be safe.
 	if len(o.CISInstanceCRN) > 0 {
-		authenticator = &core.IamAuthenticator{
-			ApiKey: o.APIKey,
-		}
-
-		err = authenticator.Validate()
+		authenticator, err = o.newAuthenticator(o.APIKey)
 		if err != nil {
+			return err
 		}
 
 		o.zonesSvc, err = zonesv1.NewZonesV1(&zonesv1.ZonesV1Options{
@@ -619,7 +494,7 @@ func (o *ClusterUninstaller) loadSDKServices() error {
 			Crn:           &o.CISInstanceCRN,
 		})
 		if err != nil {
-			return fmt.Errorf("loadSDKServices: loadSDKServices: creating zonesSvc: %v", err)
+			return fmt.Errorf("loadSDKServices: creating zonesSvc: %w", err)
 		}
 
 		ctx, cancel := o.contextWithTimeout()
@@ -629,7 +504,7 @@ func (o *ClusterUninstaller) loadSDKServices() error {
 		zoneOptions := o.zonesSvc.NewListZonesOptions()
 		zoneResources, detailedResponse, err := o.zonesSvc.ListZonesWithContext(ctx, zoneOptions)
 		if err != nil {
-			return fmt.Errorf("loadSDKServices: loadSDKServices: Failed to list Zones: %v and the response is: %s", err, detailedResponse)
+			return fmt.Errorf("loadSDKServices: Failed to list Zones: %w and the response is: %s", err, detailedResponse)
 		}
 
 		for _, zone := range zoneResources.Result {
@@ -638,41 +513,44 @@ func (o *ClusterUninstaller) loadSDKServices() error {
 				o.dnsZoneID = *zone.ID
 			}
 		}
+
+		authenticator, err = o.newAuthenticator(o.APIKey)
+		if err != nil {
+			return err
+		}
+
 		o.dnsRecordsSvc, err = dnsrecordsv1.NewDnsRecordsV1(&dnsrecordsv1.DnsRecordsV1Options{
 			Authenticator:  authenticator,
 			Crn:            &o.CISInstanceCRN,
 			ZoneIdentifier: &o.dnsZoneID,
 		})
 		if err != nil {
-			return fmt.Errorf("loadSDKServices: loadSDKServices: Failed to instantiate dnsRecordsSvc: %v", err)
+			return fmt.Errorf("loadSDKServices: Failed to instantiate dnsRecordsSvc: %w", err)
 		}
 	}
 
 	if len(o.DNSInstanceCRN) > 0 {
-		authenticator = &core.IamAuthenticator{
-			ApiKey: o.APIKey,
-		}
-
-		err = authenticator.Validate()
+		authenticator, err = o.newAuthenticator(o.APIKey)
 		if err != nil {
+			return err
 		}
 
 		o.dnsZonesSvc, err = dnszonesv1.NewDnsZonesV1(&dnszonesv1.DnsZonesV1Options{
 			Authenticator: authenticator,
 		})
 		if err != nil {
-			return fmt.Errorf("loadSDKServices: loadSDKServices: creating zonesSvc: %v", err)
+			return fmt.Errorf("loadSDKServices: creating zonesSvc: %w", err)
 		}
 
 		// Get the Zone ID
 		dnsCRN, err := crn.Parse(o.DNSInstanceCRN)
 		if err != nil {
-			return errors.Wrap(err, "Failed to parse DNSInstanceCRN")
+			return fmt.Errorf("failed to parse DNSInstanceCRN: %w", err)
 		}
 		options := o.dnsZonesSvc.NewListDnszonesOptions(dnsCRN.ServiceInstance)
 		listZonesResponse, detailedResponse, err := o.dnsZonesSvc.ListDnszones(options)
 		if err != nil {
-			return fmt.Errorf("loadSDKServices: loadSDKServices: Failed to list Zones: %v and the response is: %s", err, detailedResponse)
+			return fmt.Errorf("loadSDKServices: Failed to list Zones: %w and the response is: %s", err, detailedResponse)
 		}
 
 		for _, zone := range listZonesResponse.Dnszones {
@@ -682,15 +560,161 @@ func (o *ClusterUninstaller) loadSDKServices() error {
 			}
 		}
 
+		authenticator, err = o.newAuthenticator(o.APIKey)
+		if err != nil {
+			return err
+		}
+
 		o.resourceRecordsSvc, err = resourcerecordsv1.NewResourceRecordsV1(&resourcerecordsv1.ResourceRecordsV1Options{
 			Authenticator: authenticator,
 		})
 		if err != nil {
-			return fmt.Errorf("loadSDKServices: loadSDKServices: Failed to instantiate resourceRecordsSvc: %v", err)
+			return fmt.Errorf("loadSDKServices: Failed to instantiate resourceRecordsSvc: %w", err)
 		}
 	}
 
+	// If we should have created a service instance dynamically
+	if o.ServiceGUID == "" {
+		serviceName = fmt.Sprintf("%s-power-iaas", o.InfraID)
+		o.Logger.Debugf("loadSDKServices: serviceName = %v", serviceName)
+
+		o.ServiceGUID, err = o.ServiceInstanceNameToGUID(context.Background(), serviceName)
+		if err != nil {
+			return fmt.Errorf("loadSDKServices: ServiceInstanceNameToGUID: %w", err)
+		}
+	}
+	if o.ServiceGUID == "" {
+		// The rest of this function relies on o.ServiceGUID, so finish now!
+		return nil
+	}
+
+	o.instanceClient = instance.NewIBMPIInstanceClient(context.Background(), o.piSession, o.ServiceGUID)
+	if o.instanceClient == nil {
+		return fmt.Errorf("loadSDKServices: o.instanceClient is nil")
+	}
+
+	o.imageClient = instance.NewIBMPIImageClient(context.Background(), o.piSession, o.ServiceGUID)
+	if o.imageClient == nil {
+		return fmt.Errorf("loadSDKServices: o.imageClient is nil")
+	}
+
+	o.jobClient = instance.NewIBMPIJobClient(context.Background(), o.piSession, o.ServiceGUID)
+	if o.jobClient == nil {
+		return fmt.Errorf("loadSDKServices: o.jobClient is nil")
+	}
+
+	o.keyClient = instance.NewIBMPIKeyClient(context.Background(), o.piSession, o.ServiceGUID)
+	if o.keyClient == nil {
+		return fmt.Errorf("loadSDKServices: o.keyClient is nil")
+	}
+
+	o.dhcpClient = instance.NewIBMPIDhcpClient(context.Background(), o.piSession, o.ServiceGUID)
+	if o.dhcpClient == nil {
+		return fmt.Errorf("loadSDKServices: o.dhcpClient is nil")
+	}
+
+	o.networkClient = instance.NewIBMPINetworkClient(context.Background(), o.piSession, o.ServiceGUID)
+	if o.networkClient == nil {
+		return fmt.Errorf("loadSDKServices: o.networkClient is nil")
+	}
+
 	return nil
+}
+
+// ServiceInstanceNameToGUID returns the GUID of the matching service instance name which was passed in.
+func (o *ClusterUninstaller) ServiceInstanceNameToGUID(ctx context.Context, name string) (string, error) {
+	var (
+		options   *resourcecontrollerv2.ListResourceInstancesOptions
+		resources *resourcecontrollerv2.ResourceInstancesList
+		err       error
+		perPage   int64 = 10
+		moreData        = true
+		nextURL   *string
+		groupID   = o.resourceGroupID
+	)
+
+	o.Logger.Debugf("ServiceInstanceNameToGUID: groupID = %s", groupID)
+	// If the user passes in a human readable group id, then we need to convert it to a UUID
+	listGroupOptions := o.managementSvc.NewListResourceGroupsOptions()
+	groups, _, err := o.managementSvc.ListResourceGroupsWithContext(ctx, listGroupOptions)
+	if err != nil {
+		return "", fmt.Errorf("failed to list resource groups: %w", err)
+	}
+	for _, group := range groups.Resources {
+		o.Logger.Debugf("ServiceInstanceNameToGUID: group.Name = %s", *group.Name)
+		if *group.Name == groupID {
+			groupID = *group.ID
+		}
+	}
+	o.Logger.Debugf("ServiceInstanceNameToGUID: groupID = %s", groupID)
+
+	options = o.controllerSvc.NewListResourceInstancesOptions()
+	options.SetResourceGroupID(groupID)
+	// resource ID for Power Systems Virtual Server in the Global catalog
+	options.SetResourceID(powerIAASResourceID)
+	options.SetLimit(perPage)
+
+	for moreData {
+		resources, _, err = o.controllerSvc.ListResourceInstancesWithContext(ctx, options)
+		if err != nil {
+			return "", fmt.Errorf("failed to list resource instances: %w", err)
+		}
+
+		for _, resource := range resources.Resources {
+			var (
+				getResourceOptions *resourcecontrollerv2.GetResourceInstanceOptions
+				resourceInstance   *resourcecontrollerv2.ResourceInstance
+				response           *core.DetailedResponse
+			)
+
+			o.Logger.Debugf("ServiceInstanceNameToGUID: resource.Name = %s", *resource.Name)
+
+			getResourceOptions = o.controllerSvc.NewGetResourceInstanceOptions(*resource.ID)
+
+			resourceInstance, response, err = o.controllerSvc.GetResourceInstance(getResourceOptions)
+			if err != nil {
+				return "", fmt.Errorf("failed to get instance: %w", err)
+			}
+			if response != nil && response.StatusCode == gohttp.StatusNotFound || response.StatusCode == gohttp.StatusInternalServerError {
+				return "", fmt.Errorf("failed to get instance, response is: %v", response)
+			}
+
+			if resourceInstance.Type == nil {
+				o.Logger.Debugf("ServiceInstanceNameToGUID: type: nil")
+				continue
+			}
+			o.Logger.Debugf("ServiceInstanceNameToGUID: type: %v", *resourceInstance.Type)
+			if resourceInstance.GUID == nil {
+				o.Logger.Debugf("ServiceInstanceNameToGUID: GUID: nil")
+				continue
+			}
+			if *resourceInstance.Type != "service_instance" && *resourceInstance.Type != "composite_instance" {
+				continue
+			}
+			if *resourceInstance.Name != name {
+				continue
+			}
+
+			o.Logger.Debugf("ServiceInstanceNameToGUID: Found match!")
+
+			return *resourceInstance.GUID, nil
+		}
+
+		// Based on: https://cloud.ibm.com/apidocs/resource-controller/resource-controller?code=go#list-resource-instances
+		nextURL, err = core.GetQueryParam(resources.NextURL, "start")
+		if err != nil {
+			return "", fmt.Errorf("failed to GetQueryParam on start: %w", err)
+		}
+		if nextURL == nil {
+			options.SetStart("")
+		} else {
+			options.SetStart(*nextURL)
+		}
+
+		moreData = *resources.RowsCount == perPage
+	}
+
+	return "", nil
 }
 
 func (o *ClusterUninstaller) contextWithTimeout() (context.Context, context.CancelFunc) {
@@ -738,7 +762,7 @@ func aggregateError(errs []error, pending ...int) error {
 		return err
 	}
 	if len(pending) > 0 && pending[0] > 0 {
-		return errors.Errorf("%d items pending", pending[0])
+		return fmt.Errorf("%d items pending", pending[0])
 	}
 	return nil
 }

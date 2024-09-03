@@ -48,14 +48,19 @@ resource "openstack_networking_port_v2" "bootstrap_port" {
     value = var.cluster_domain
   }
 
-  fixed_ip {
-    subnet_id = var.nodes_subnet_id
+  dynamic "fixed_ip" {
+    for_each = var.nodes_default_port.fixed_ips
+
+    content {
+      subnet_id  = fixed_ip.value["subnet_id"]
+      ip_address = fixed_ip.value["ip_address"]
+    }
   }
 
   dynamic "allowed_address_pairs" {
-    for_each = var.openstack_user_managed_load_balancer ? [] : [1]
+    for_each = var.openstack_user_managed_load_balancer ? [] : var.openstack_api_int_ips
     content {
-      ip_address = var.openstack_api_int_ip
+      ip_address = allowed_address_pairs.value
     }
   }
 
@@ -68,7 +73,7 @@ resource "openstack_blockstorage_volume_v3" "bootstrap_volume" {
   description = local.description
 
   size        = var.openstack_master_root_volume_size
-  volume_type = var.openstack_master_root_volume_type
+  volume_type = var.openstack_master_root_volume_types[0]
   image_id    = data.openstack_images_image_v2.base_image.id
 
   availability_zone = var.openstack_master_root_volume_availability_zones[0]

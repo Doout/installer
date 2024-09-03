@@ -1,6 +1,7 @@
 package machines
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,6 +39,7 @@ metadata:
     machineconfiguration.openshift.io/role: worker
   name: 99-worker-ssh
 spec:
+  baseOSExtensionsContainerImage: ""
   config:
     ignition:
       version: 3.2.0
@@ -64,6 +66,7 @@ metadata:
     machineconfiguration.openshift.io/role: worker
   name: 99-worker-disable-hyperthreading
 spec:
+  baseOSExtensionsContainerImage: ""
   config:
     ignition:
       version: 3.2.0
@@ -71,6 +74,7 @@ spec:
   fips: false
   kernelArguments:
   - nosmt
+  - smt-enabled=off
   kernelType: ""
   osImageURL: ""
 `},
@@ -87,6 +91,7 @@ metadata:
     machineconfiguration.openshift.io/role: worker
   name: 99-worker-disable-hyperthreading
 spec:
+  baseOSExtensionsContainerImage: ""
   config:
     ignition:
       version: 3.2.0
@@ -94,6 +99,7 @@ spec:
   fips: false
   kernelArguments:
   - nosmt
+  - smt-enabled=off
   kernelType: ""
   osImageURL: ""
 `, `apiVersion: machineconfiguration.openshift.io/v1
@@ -104,6 +110,7 @@ metadata:
     machineconfiguration.openshift.io/role: worker
   name: 99-worker-ssh
 spec:
+  baseOSExtensionsContainerImage: ""
   config:
     ignition:
       version: 3.2.0
@@ -153,7 +160,7 @@ spec:
 							},
 						},
 					}),
-				(*rhcos.Image)(pointer.StringPtr("test-image")),
+				rhcos.MakeAsset("test-image"),
 				(*rhcos.Release)(pointer.StringPtr("412.86.202208101040-0")),
 				&machine.Worker{
 					File: &asset.File{
@@ -163,7 +170,7 @@ spec:
 				},
 			)
 			worker := &Worker{}
-			if err := worker.Generate(parents); err != nil {
+			if err := worker.Generate(context.Background(), parents); err != nil {
 				t.Fatalf("failed to generate worker machines: %v", err)
 			}
 			expectedLen := len(tc.expectedMachineConfig)
@@ -215,7 +222,7 @@ func TestComputeIsNotModified(t *testing.T) {
 			InfraID: "test-infra-id",
 		},
 		installConfig,
-		(*rhcos.Image)(pointer.StringPtr("test-image")),
+		rhcos.MakeAsset("test-image"),
 		(*rhcos.Release)(pointer.StringPtr("412.86.202208101040-0")),
 		&machine.Worker{
 			File: &asset.File{
@@ -225,11 +232,60 @@ func TestComputeIsNotModified(t *testing.T) {
 		},
 	)
 	worker := &Worker{}
-	if err := worker.Generate(parents); err != nil {
+	if err := worker.Generate(context.Background(), parents); err != nil {
 		t.Fatalf("failed to generate master machines: %v", err)
 	}
 
 	if installConfig.Config.Compute[0].Platform.AWS.Type != "" {
 		t.Fatalf("compute in the install config has been modified")
+	}
+}
+
+func TestDefaultAWSMachinePoolPlatform(t *testing.T) {
+	type testCase struct {
+		name                string
+		poolName            string
+		expectedMachinePool awstypes.MachinePool
+		assert              func(tc *testCase)
+	}
+	cases := []testCase{
+		{
+			name:     "default EBS type for compute pool",
+			poolName: types.MachinePoolComputeRoleName,
+			expectedMachinePool: awstypes.MachinePool{
+				EC2RootVolume: awstypes.EC2RootVolume{
+					Type: awstypes.VolumeTypeGp3,
+					Size: decimalRootVolumeSize,
+				},
+			},
+			assert: func(tc *testCase) {
+				mp := defaultAWSMachinePoolPlatform(tc.poolName)
+				want := tc.expectedMachinePool.EC2RootVolume.Type
+				got := mp.EC2RootVolume.Type
+				assert.Equal(t, want, got, "unexepcted EBS type")
+			},
+		},
+		{
+			name:     "default EBS type for edge pool",
+			poolName: types.MachinePoolEdgeRoleName,
+			expectedMachinePool: awstypes.MachinePool{
+				EC2RootVolume: awstypes.EC2RootVolume{
+					Type: awstypes.VolumeTypeGp2,
+					Size: decimalRootVolumeSize,
+				},
+			},
+			assert: func(tc *testCase) {
+				mp := defaultAWSMachinePoolPlatform(tc.poolName)
+				want := tc.expectedMachinePool.EC2RootVolume.Type
+				got := mp.EC2RootVolume.Type
+				assert.Equal(t, want, got, "unexepcted EBS type")
+			},
+		},
+	}
+	for i := range cases {
+		tc := cases[i]
+		t.Run(tc.name, func(t *testing.T) {
+			tc.assert(&tc)
+		})
 	}
 }

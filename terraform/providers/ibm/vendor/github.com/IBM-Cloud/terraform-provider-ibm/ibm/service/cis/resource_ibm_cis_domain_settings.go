@@ -1,4 +1,4 @@
-// Copyright IBM Corp. 2017, 2021 All Rights Reserved.
+// Copyright IBM Corp. 2017, 2023 All Rights Reserved.
 // Licensed under the Mozilla Public License v2.0
 
 package cis
@@ -6,11 +6,12 @@ package cis
 import (
 	"log"
 
+	"github.com/IBM/go-sdk-core/v5/core"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/conns"
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/flex"
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/validate"
-	"github.com/IBM/go-sdk-core/v5/core"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
 const (
@@ -51,6 +52,7 @@ const (
 	cisDomainSettingsSecurityHeaderMaxAge            = "max_age"
 	cisDomainSettingsSecurityHeaderIncludeSubdomains = "include_subdomains"
 	cisDomainSettingsSecurityHeaderNoSniff           = "nosniff"
+	cisDomainSettingsSecurityHeaderPreload           = "preload"
 	cisDomainSettingsMobileRedirect                  = "mobile_redirect"
 	cisDomainSettingsMobileRedirectStatus            = "status"
 	cisDomainSettingsMobileRedirectMobileSubdomain   = "mobile_subdomain"
@@ -125,7 +127,6 @@ func ResourceIBMCISSettings() *schema.Resource {
 				ValidateFunc: validate.InvokeValidator(
 					ibmCISDomainSettings,
 					cisDomainSettingsTLSVersionValidatorID),
-				Default: "1.1",
 			},
 			cisDomainSettingsCNAMEFlattening: {
 				Type:        schema.TypeString,
@@ -412,6 +413,12 @@ func ResourceIBMCISSettings() *schema.Resource {
 							Description: "security header no sniff",
 							Required:    true,
 						},
+						cisDomainSettingsSecurityHeaderPreload: {
+							Type:        schema.TypeBool,
+							Description: "security header preload",
+							Optional:    true,
+							Default:     false,
+						},
 					},
 				},
 			},
@@ -473,7 +480,7 @@ func ResourceIBMCISDomainSettingValidator() *validate.ResourceValidator {
 			Identifier:                 "cis_id",
 			ValidateFunctionIdentifier: validate.ValidateCloudData,
 			Type:                       validate.TypeString,
-			CloudDataType:              "ResourceInstance",
+			CloudDataType:              "resource_instance",
 			CloudDataRange:             []string{"service:internet-svcs"},
 			Required:                   true})
 	validateSchema = append(validateSchema,
@@ -1030,10 +1037,12 @@ func resourceCISSettingsUpdate(d *schema.ResourceData, meta interface{}) error {
 					dataMap := v.([]interface{})[0].(map[string]interface{})
 					enabled := dataMap[cisDomainSettingsSecurityHeaderEnabled].(bool)
 					nosniff := dataMap[cisDomainSettingsSecurityHeaderNoSniff].(bool)
+					preload := dataMap[cisDomainSettingsSecurityHeaderPreload].(bool)
+
 					includeSubdomain := dataMap[cisDomainSettingsSecurityHeaderIncludeSubdomains].(bool)
 					maxAge := int64(dataMap[cisDomainSettingsSecurityHeaderMaxAge].(int))
 					securityVal, err := cisClient.NewSecurityHeaderSettingValueStrictTransportSecurity(
-						enabled, maxAge, includeSubdomain, nosniff)
+						enabled, maxAge, includeSubdomain, preload, nosniff)
 					if err != nil {
 						log.Println("Invalid security header setting values")
 						return err
@@ -1379,6 +1388,9 @@ func resourceCISSettingsRead(d *schema.ResourceData, meta interface{}) error {
 					}
 					if securityHeader.Nosniff != nil {
 						value[cisDomainSettingsSecurityHeaderNoSniff] = *securityHeader.Nosniff
+					}
+					if securityHeader.Preload != nil {
+						value[cisDomainSettingsSecurityHeaderPreload] = *securityHeader.Preload
 					}
 					if securityHeader.IncludeSubdomains != nil {
 						value[cisDomainSettingsSecurityHeaderIncludeSubdomains] = *securityHeader.IncludeSubdomains

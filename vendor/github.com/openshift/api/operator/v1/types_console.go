@@ -9,13 +9,21 @@ import (
 // +genclient
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:path=consoles,scope=Cluster
+// +kubebuilder:subresource:status
+// +openshift:api-approved.openshift.io=https://github.com/openshift/api/pull/486
+// +openshift:file-pattern=cvoRunLevel=0000_50,operatorName=console,operatorOrdering=01
 
 // Console provides a means to configure an operator to manage the console.
 //
 // Compatibility level 1: Stable within a major release for a minimum of 12 months or 3 minor releases (whichever is longer).
 // +openshift:compatibility-gen:level=1
 type Console struct {
-	metav1.TypeMeta   `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
+
+	// metadata is the standard object's metadata.
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
 	// +kubebuilder:validation:Required
@@ -49,6 +57,11 @@ type ConsoleSpec struct {
 	// plugins defines a list of enabled console plugin names.
 	// +optional
 	Plugins []string `json:"plugins,omitempty"`
+	// ingress allows to configure the alternative ingress for the console.
+	// This field is intended for clusters without ingress capability,
+	// where access to routes is not possible.
+	// +optional
+	Ingress Ingress `json:"ingress"`
 }
 
 // ConsoleConfigRoute holds information on external route access to console.
@@ -86,12 +99,65 @@ type StatuspageProvider struct {
 	PageID string `json:"pageID"`
 }
 
+// ConsoleCapabilityName defines name of UI capability in the console UI.
+type ConsoleCapabilityName string
+
+const (
+	// lightspeedButton is the name for the Lightspeed button HTML element.
+	LightspeedButton ConsoleCapabilityName = "LightspeedButton"
+)
+
+// CapabilityState defines the state of the capability in the console UI.
+type CapabilityState string
+
+const (
+	// "Enabled" means that the capability will be rendered in the console UI.
+	CapabilityEnabled CapabilityState = "Enabled"
+	// "Disabled" means that the capability will not be rendered in the console UI.
+	CapabilityDisabled CapabilityState = "Disabled"
+)
+
+// CapabilityVisibility defines the criteria to enable/disable a capability.
+// +union
+type CapabilityVisibility struct {
+	// state defines if the capability is enabled or disabled in the console UI.
+	// Enabling the capability in the console UI is represented by the "Enabled" value.
+	// Disabling the capability in the console UI is represented by the "Disabled" value.
+	// +unionDiscriminator
+	// +kubebuilder:validation:Enum:="Enabled";"Disabled"
+	// +kubebuilder:validation:Required
+	State CapabilityState `json:"state"`
+}
+
+// Capabilities contains set of UI capabilities and their state in the console UI.
+type Capability struct {
+	// name is the unique name of a capability.
+	// Available capabilities are LightspeedButton.
+	// +kubebuilder:validation:Enum:="LightspeedButton";
+	// +kubebuilder:validation:Required
+	Name ConsoleCapabilityName `json:"name"`
+	// visibility defines the visibility state of the capability.
+	// +kubebuilder:validation:Required
+	Visibility CapabilityVisibility `json:"visibility"`
+}
+
 // ConsoleCustomization defines a list of optional configuration for the console UI.
 type ConsoleCustomization struct {
+	// capabilities defines an array of capabilities that can be interacted with in the console UI.
+	// Each capability defines a visual state that can be interacted with the console to render in the UI.
+	// Available capabilities are LightspeedButton.
+	// Each of the available capabilities may appear only once in the list.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=1
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Capabilities []Capability `json:"capabilities,omitempty"`
 	// brand is the default branding of the web console which can be overridden by
 	// providing the brand field.  There is a limited set of specific brand options.
 	// This field controls elements of the console such as the logo.
 	// Invalid value will prevent a console rollout.
+	// +kubebuilder:validation:Enum:=openshift;okd;online;ocp;dedicated;azure;OpenShift;OKD;Online;OCP;Dedicated;Azure;ROSA
 	Brand Brand `json:"brand,omitempty"`
 	// documentationBaseURL links to external documentation are shown in various sections
 	// of the web console.  Providing documentationBaseURL will override the default
@@ -335,23 +401,65 @@ type PinnedResourceReference struct {
 }
 
 // Brand is a specific supported brand within the console.
-// +kubebuilder:validation:Pattern=`^$|^(ocp|origin|okd|dedicated|online|azure)$`
 type Brand string
 
 const (
+	// Legacy branding for OpenShift
+	BrandOpenShiftLegacy Brand = "openshift"
+	// Legacy branding for The Origin Community Distribution of Kubernetes
+	BrandOKDLegacy Brand = "okd"
+	// Legacy branding for OpenShift Online
+	BrandOnlineLegacy Brand = "online"
+	// Legacy branding for OpenShift Container Platform
+	BrandOCPLegacy Brand = "ocp"
+	// Legacy branding for OpenShift Dedicated
+	BrandDedicatedLegacy Brand = "dedicated"
+	// Legacy branding for Azure Red Hat OpenShift
+	BrandAzureLegacy Brand = "azure"
 	// Branding for OpenShift
-	BrandOpenShift Brand = "openshift"
+	BrandOpenShift Brand = "OpenShift"
 	// Branding for The Origin Community Distribution of Kubernetes
-	BrandOKD Brand = "okd"
+	BrandOKD Brand = "OKD"
 	// Branding for OpenShift Online
-	BrandOnline Brand = "online"
+	BrandOnline Brand = "Online"
 	// Branding for OpenShift Container Platform
-	BrandOCP Brand = "ocp"
+	BrandOCP Brand = "OCP"
 	// Branding for OpenShift Dedicated
-	BrandDedicated Brand = "dedicated"
+	BrandDedicated Brand = "Dedicated"
 	// Branding for Azure Red Hat OpenShift
-	BrandAzure Brand = "azure"
+	BrandAzure Brand = "Azure"
+	// Branding for Red Hat OpenShift Service on AWS
+	BrandROSA Brand = "ROSA"
 )
+
+// Ingress allows cluster admin to configure alternative ingress for the console.
+type Ingress struct {
+	// consoleURL is a URL to be used as the base console address.
+	// If not specified, the console route hostname will be used.
+	// This field is required for clusters without ingress capability,
+	// where access to routes is not possible.
+	// Make sure that appropriate ingress is set up at this URL.
+	// The console operator will monitor the URL and may go degraded
+	// if it's unreachable for an extended period.
+	// Must use the HTTPS scheme.
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="size(self) == 0 || isURL(self)",message="console url must be a valid absolute URL"
+	// +kubebuilder:validation:XValidation:rule="size(self) == 0 || url(self).getScheme() == 'https'",message="console url scheme must be https"
+	// +kubebuilder:validation:MaxLength=1024
+	ConsoleURL string `json:"consoleURL"`
+	// clientDownloadsURL is a URL to be used as the address to download client binaries.
+	// If not specified, the downloads route hostname will be used.
+	// This field is required for clusters without ingress capability,
+	// where access to routes is not possible.
+	// The console operator will monitor the URL and may go degraded
+	// if it's unreachable for an extended period.
+	// Must use the HTTPS scheme.
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="size(self) == 0 || isURL(self)",message="client downloads url must be a valid absolute URL"
+	// +kubebuilder:validation:XValidation:rule="size(self) == 0 || url(self).getScheme() == 'https'",message="client downloads url scheme must be https"
+	// +kubebuilder:validation:MaxLength=1024
+	ClientDownloadsURL string `json:"clientDownloadsURL"`
+}
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
@@ -359,6 +467,9 @@ const (
 // +openshift:compatibility-gen:level=1
 type ConsoleList struct {
 	metav1.TypeMeta `json:",inline"`
+
+	// metadata is the standard list's metadata.
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
 	metav1.ListMeta `json:"metadata"`
 
 	Items []Console `json:"items"`

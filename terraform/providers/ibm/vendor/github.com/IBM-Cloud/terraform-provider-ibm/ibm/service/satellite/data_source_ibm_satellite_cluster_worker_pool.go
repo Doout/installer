@@ -65,6 +65,11 @@ func DataSourceIBMSatelliteClusterWorkerPool() *schema.Resource {
 				Set:         schema.HashString,
 				Description: "Host labels on the workers",
 			},
+			"operating_system": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "The operating system of the hosts in the worker pool",
+			},
 			"resource_group_id": {
 				Type:        schema.TypeString,
 				Optional:    true,
@@ -91,6 +96,11 @@ func DataSourceIBMSatelliteClusterWorkerPool() *schema.Resource {
 				Type:        schema.TypeBool,
 				Computed:    true,
 				Description: "Enable auto scalling for worker pool",
+			},
+			"openshift_license_source": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "License source for Openshift",
 			},
 		},
 	}
@@ -143,11 +153,13 @@ func dataSourceIBMSatelliteClusterWorkerPoolRead(d *schema.ResourceData, meta in
 	d.Set("worker_count", *workerPool.WorkerCount)
 	d.Set("worker_pool_labels", workerPool.Labels)
 	d.Set("host_labels", workerPool.HostLabels)
+	d.Set("operating_system", *workerPool.OperatingSystem)
 	d.Set("zones", zones)
 	d.Set("cluster", cluster)
 	d.Set("auto_scale_enabled", *workerPool.AutoscaleEnabled)
 	d.Set("state", *workerPool.Lifecycle.ActualState)
 	d.Set("isolation", *workerPool.Isolation)
+	d.Set("openshift_license_source", *workerPool.OpenshiftLicense)
 	d.SetId(*workerPool.ID)
 
 	return nil

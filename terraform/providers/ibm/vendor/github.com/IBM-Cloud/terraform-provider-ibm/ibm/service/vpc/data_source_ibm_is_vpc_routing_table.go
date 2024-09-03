@@ -60,6 +60,14 @@ func DataSourceIBMIBMIsVPCRoutingTable() *schema.Resource {
 				Description:   "The routing table identifier.",
 			},
 
+			"advertise_routes_to": &schema.Schema{
+				Type:        schema.TypeList,
+				Computed:    true,
+				Description: "The ingress sources to advertise routes to. Routes in the table with `advertise` enabled will be advertised to these sources.The enumerated values for this property are expected to expand in the future. When processing this property, check for and log unknown values. Optionally halt processing and surface the error, or bypass the resource on which the unexpected property value was encountered.",
+				Elem: &schema.Schema{
+					Type: schema.TypeString,
+				},
+			},
 			rtCreateAt: &schema.Schema{
 				Type:        schema.TypeString,
 				Computed:    true,
@@ -89,6 +97,11 @@ func DataSourceIBMIBMIsVPCRoutingTable() *schema.Resource {
 				Type:        schema.TypeBool,
 				Computed:    true,
 				Description: "Indicates whether this routing table is used to route traffic that originates from[Direct Link](https://cloud.ibm.com/docs/dl/) to this VPC.Incoming traffic will be routed according to the routing table with one exception: routes with an `action` of `deliver` are treated as `drop` unless the `next_hop` is an IP address within the VPC's address prefix ranges. Therefore, if an incoming packet matches a route with a `next_hop` of an internet-bound IP address or a VPN gateway connection, the packet will be dropped.",
+			},
+			rtRouteInternetIngress: {
+				Type:        schema.TypeBool,
+				Computed:    true,
+				Description: "Indicates whether this routing table is used to route traffic that originates from the internet.Incoming traffic will be routed according to the routing table with two exceptions:- Traffic destined for IP addresses associated with public gateways will not be  subject to routes in this routing table.- Routes with an action of deliver are treated as drop unless the `next_hop` is an  IP address bound to a network interface on a subnet in the route's `zone`.  Therefore, if an incoming packet matches a route with a `next_hop` of an  internet-bound IP address or a VPN gateway connection, the packet will be dropped.",
 			},
 			rtRouteTransitGatewayIngress: &schema.Schema{
 				Type:        schema.TypeBool,
@@ -281,6 +294,9 @@ func dataSourceIBMIBMIsVPCRoutingTableRead(context context.Context, d *schema.Re
 		return diag.FromErr(fmt.Errorf("[ERROR] Error setting route_direct_link_ingress: %s", err))
 	}
 
+	if err = d.Set(rtRouteInternetIngress, routingTable.RouteInternetIngress); err != nil {
+		return diag.FromErr(fmt.Errorf("[ERROR] Error setting route_internet_ingress: %s", err))
+	}
 	if err = d.Set(rtRouteTransitGatewayIngress, routingTable.RouteTransitGatewayIngress); err != nil {
 		return diag.FromErr(fmt.Errorf("[ERROR] Error setting route_transit_gateway_ingress: %s", err))
 	}
@@ -289,6 +305,9 @@ func dataSourceIBMIBMIsVPCRoutingTableRead(context context.Context, d *schema.Re
 		return diag.FromErr(fmt.Errorf("[ERROR] Error setting route_vpc_zone_ingress: %s", err))
 	}
 
+	if err = d.Set("advertise_routes_to", routingTable.AdvertiseRoutesTo); err != nil {
+		return diag.FromErr(fmt.Errorf("[ERROR] Error setting value of advertise_routes_to: %s", err))
+	}
 	routes := []map[string]interface{}{}
 	if routingTable.Routes != nil {
 		for _, modelItem := range routingTable.Routes {

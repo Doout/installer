@@ -1,6 +1,7 @@
 package installconfig
 
 import (
+	"context"
 	"errors"
 	"os"
 	"testing"
@@ -20,14 +21,13 @@ import (
 
 func TestInstallConfigGenerate_FillsInDefaults(t *testing.T) {
 	sshPublicKey := &sshPublicKey{}
-	baseDomain := &baseDomain{"test-domain"}
+	baseDomain := &baseDomain{"test-domain", types.ExternalPublishingStrategy}
 	clusterName := &clusterName{"test-cluster"}
 	pullSecret := &pullSecret{`{"auths":{"example.com":{"auth":"authorization value"}}}`}
 	platform := &platform{
 		Platform: types.Platform{None: &none.Platform{}},
 	}
 	installConfig := &InstallConfig{}
-	networking := &networking{}
 	parents := asset.Parents{}
 	parents.Add(
 		sshPublicKey,
@@ -35,9 +35,8 @@ func TestInstallConfigGenerate_FillsInDefaults(t *testing.T) {
 		clusterName,
 		pullSecret,
 		platform,
-		networking,
 	)
-	if err := installConfig.Generate(parents); err != nil {
+	if err := installConfig.Generate(context.Background(), parents); err != nil {
 		t.Errorf("unexpected error generating install config: %v", err)
 	}
 	expected := &types.InstallConfig{

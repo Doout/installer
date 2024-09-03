@@ -1,12 +1,13 @@
 package powervs
 
 import (
+	"context"
+	"fmt"
 	"math"
 	"strings"
 	"time"
 
 	"github.com/IBM-Cloud/power-go-client/power/models"
-	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -20,6 +21,11 @@ func (o *ClusterUninstaller) listJobs() (cloudResources, error) {
 
 	o.Logger.Debugf("Listing jobs")
 
+	if o.jobClient == nil {
+		result := []cloudResource{}
+		return cloudResources{}.insert(result...), nil
+	}
+
 	ctx, cancel := o.contextWithTimeout()
 	defer cancel()
 
@@ -32,7 +38,7 @@ func (o *ClusterUninstaller) listJobs() (cloudResources, error) {
 
 	jobs, err = o.jobClient.GetAll()
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to list jobs")
+		return nil, fmt.Errorf("failed to list jobs: %w", err)
 	}
 
 	result := []cloudResource{}
@@ -96,7 +102,7 @@ func (o *ClusterUninstaller) deleteJob(item cloudResource) (DeleteJobResult, err
 	case "completed":
 		//		err = o.jobClient.Delete(item.id)
 		//		if err != nil {
-		//			return DeleteJobError, errors.Wrapf(err, "failed to delete job %s", item.name)
+		//			return DeleteJobError, fmt.Errorf("failed to delete job %s: %w", item.name, err)
 		//		}
 
 		o.deletePendingItems(item.typeName, []cloudResource{item})
@@ -109,8 +115,8 @@ func (o *ClusterUninstaller) deleteJob(item cloudResource) (DeleteJobResult, err
 		return DeleteJobRunning, nil
 
 	case "failed":
-		err = errors.Errorf("@TODO we cannot query error message inside the job")
-		return DeleteJobError, errors.Wrapf(err, "job %v has failed", item.id)
+		err = fmt.Errorf("@TODO we cannot query error message inside the job")
+		return DeleteJobError, fmt.Errorf("job %v has failed: %w", item.id, err)
 
 	default:
 		o.Logger.Debugf("Default waiting for job %q to delete (status is %q)", item.name, *job.Status.State)
@@ -148,7 +154,7 @@ func (o *ClusterUninstaller) destroyJobs() error {
 			Factor:   1.1,
 			Cap:      leftInContext(ctx),
 			Steps:    math.MaxInt32}
-		err = wait.ExponentialBackoffWithContext(ctx, backoff, func() (bool, error) {
+		err = wait.ExponentialBackoffWithContext(ctx, backoff, func(context.Context) (bool, error) {
 			result, err2 := o.deleteJob(item)
 			switch result {
 			case DeleteJobSuccess:
@@ -161,7 +167,7 @@ func (o *ClusterUninstaller) destroyJobs() error {
 				o.Logger.Debugf("destroyJobs: deleteJob returns DeleteJobError: %v", err2)
 				return false, err2
 			default:
-				return false, errors.Errorf("destroyJobs: deleteJob unknown result enum %v", result)
+				return false, fmt.Errorf("destroyJobs: deleteJob unknown result enum %v", result)
 			}
 		})
 		if err != nil {
@@ -173,7 +179,7 @@ func (o *ClusterUninstaller) destroyJobs() error {
 		for _, item := range items {
 			o.Logger.Debugf("destroyJobs: found %s in pending items", item.name)
 		}
-		return errors.Errorf("destroyJobs: %d undeleted items pending", len(items))
+		return fmt.Errorf("destroyJobs: %d undeleted items pending", len(items))
 	}
 
 	backoff := wait.Backoff{
@@ -181,7 +187,7 @@ func (o *ClusterUninstaller) destroyJobs() error {
 		Factor:   1.1,
 		Cap:      leftInContext(ctx),
 		Steps:    math.MaxInt32}
-	err = wait.ExponentialBackoffWithContext(ctx, backoff, func() (bool, error) {
+	err = wait.ExponentialBackoffWithContext(ctx, backoff, func(context.Context) (bool, error) {
 		secondPassList, err2 := o.listJobs()
 		if err2 != nil {
 			return false, err2

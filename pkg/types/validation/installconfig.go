@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	dockerref "github.com/containers/image/docker/reference"
+	dockerref "github.com/containers/image/v5/docker/reference"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
@@ -20,23 +20,23 @@ import (
 	utilsnet "k8s.io/utils/net"
 
 	configv1 "github.com/openshift/api/config/v1"
+	"github.com/openshift/api/features"
 	operv1 "github.com/openshift/api/operator/v1"
+	"github.com/openshift/installer/pkg/hostcrypt"
 	"github.com/openshift/installer/pkg/ipnet"
 	"github.com/openshift/installer/pkg/types"
-	"github.com/openshift/installer/pkg/types/alibabacloud"
-	alibabacloudvalidation "github.com/openshift/installer/pkg/types/alibabacloud/validation"
 	"github.com/openshift/installer/pkg/types/aws"
 	awsvalidation "github.com/openshift/installer/pkg/types/aws/validation"
 	"github.com/openshift/installer/pkg/types/azure"
 	azurevalidation "github.com/openshift/installer/pkg/types/azure/validation"
 	"github.com/openshift/installer/pkg/types/baremetal"
 	baremetalvalidation "github.com/openshift/installer/pkg/types/baremetal/validation"
+	"github.com/openshift/installer/pkg/types/external"
+	"github.com/openshift/installer/pkg/types/featuregates"
 	"github.com/openshift/installer/pkg/types/gcp"
 	gcpvalidation "github.com/openshift/installer/pkg/types/gcp/validation"
 	"github.com/openshift/installer/pkg/types/ibmcloud"
 	ibmcloudvalidation "github.com/openshift/installer/pkg/types/ibmcloud/validation"
-	"github.com/openshift/installer/pkg/types/libvirt"
-	libvirtvalidation "github.com/openshift/installer/pkg/types/libvirt/validation"
 	"github.com/openshift/installer/pkg/types/nutanix"
 	nutanixvalidation "github.com/openshift/installer/pkg/types/nutanix/validation"
 	"github.com/openshift/installer/pkg/types/openstack"
@@ -48,12 +48,18 @@ import (
 	"github.com/openshift/installer/pkg/types/vsphere"
 	vspherevalidation "github.com/openshift/installer/pkg/types/vsphere/validation"
 	"github.com/openshift/installer/pkg/validate"
+	"github.com/openshift/installer/pkg/version"
 )
 
+// hostCryptBypassedAnnotation is set if the host crypt check was bypassed via environment variable.
+const hostCryptBypassedAnnotation = "install.openshift.io/hostcrypt-check-bypassed"
+
 // list of known plugins that require hostPrefix to be set
-var pluginsUsingHostPrefix = sets.NewString(string(operv1.NetworkTypeOpenShiftSDN), string(operv1.NetworkTypeOVNKubernetes))
+var pluginsUsingHostPrefix = sets.NewString(string(operv1.NetworkTypeOVNKubernetes))
 
 // ValidateInstallConfig checks that the specified install config is valid.
+//
+//nolint:gocyclo
 func ValidateInstallConfig(c *types.InstallConfig, usingAgentMethod bool) field.ErrorList {
 	allErrs := field.ErrorList{}
 	if c.TypeMeta.APIVersion == "" {
@@ -66,13 +72,11 @@ func ValidateInstallConfig(c *types.InstallConfig, usingAgentMethod bool) field.
 		return field.ErrorList{field.Invalid(field.NewPath("apiVersion"), c.TypeMeta.APIVersion, fmt.Sprintf("install-config version must be %q", types.InstallConfigVersion))}
 	}
 
-	if c.SSHKey != "" {
-		if c.FIPS == true {
-			allErrs = append(allErrs, validateFIPSconfig(c)...)
-		} else {
-			if err := validate.SSHPublicKey(c.SSHKey); err != nil {
-				allErrs = append(allErrs, field.Invalid(field.NewPath("sshKey"), c.SSHKey, err.Error()))
-			}
+	if c.FIPS {
+		allErrs = append(allErrs, validateFIPSconfig(c)...)
+	} else if c.SSHKey != "" {
+		if err := validate.SSHPublicKey(c.SSHKey); err != nil {
+			allErrs = append(allErrs, field.Invalid(field.NewPath("sshKey"), c.SSHKey, err.Error()))
 		}
 	}
 
@@ -110,6 +114,7 @@ func ValidateInstallConfig(c *types.InstallConfig, usingAgentMethod bool) field.
 		allErrs = append(allErrs, validateNetworking(c.Networking, c.IsSingleNodeOpenShift(), field.NewPath("networking"))...)
 		allErrs = append(allErrs, validateNetworkingIPVersion(c.Networking, &c.Platform)...)
 		allErrs = append(allErrs, validateNetworkingForPlatform(c.Networking, &c.Platform, field.NewPath("networking"))...)
+		allErrs = append(allErrs, validateNetworkingClusterNetworkMTU(c, field.NewPath("networking", "clusterNetworkMTU"))...)
 		allErrs = append(allErrs, validateVIPsForPlatform(c.Networking, &c.Platform, field.NewPath("platform"))...)
 	} else {
 		allErrs = append(allErrs, field.Required(field.NewPath("networking"), "networking is required"))
@@ -120,16 +125,36 @@ func ValidateInstallConfig(c *types.InstallConfig, usingAgentMethod bool) field.
 	} else {
 		allErrs = append(allErrs, field.Required(field.NewPath("controlPlane"), "controlPlane is required"))
 	}
-	allErrs = append(allErrs, validateCompute(&c.Platform, c.ControlPlane, c.Compute, field.NewPath("compute"))...)
+
+	multiArchEnabled := types.MultiArchFeatureGateEnabled(c.Platform.Name(), c.EnabledFeatureGates())
+	allErrs = append(allErrs, validateCompute(&c.Platform, c.ControlPlane, c.Compute, field.NewPath("compute"), multiArchEnabled)...)
+
+	releaseArch, err := version.ReleaseArchitecture()
+	if err != nil {
+		allErrs = append(allErrs, field.InternalError(nil, err))
+	} else {
+		allErrs = append(allErrs, validateReleaseArchitecture(c.ControlPlane, c.Compute, types.Architecture(releaseArch))...)
+	}
+
 	if err := validate.ImagePullSecret(c.PullSecret); err != nil {
 		allErrs = append(allErrs, field.Invalid(field.NewPath("pullSecret"), c.PullSecret, err.Error()))
 	}
 	if c.Proxy != nil {
 		allErrs = append(allErrs, validateProxy(c.Proxy, c, field.NewPath("proxy"))...)
 	}
-	allErrs = append(allErrs, validateImageContentSources(c.ImageContentSources, field.NewPath("imageContentSources"))...)
+	allErrs = append(allErrs, validateImageContentSources(c.DeprecatedImageContentSources, field.NewPath("imageContentSources"))...)
 	if _, ok := validPublishingStrategies[c.Publish]; !ok {
 		allErrs = append(allErrs, field.NotSupported(field.NewPath("publish"), c.Publish, validPublishingStrategyValues))
+	}
+	allErrs = append(allErrs, validateImageDigestSources(c.ImageDigestSources, field.NewPath("imageDigestSources"))...)
+	if _, ok := validPublishingStrategies[c.Publish]; !ok {
+		allErrs = append(allErrs, field.NotSupported(field.NewPath("publish"), c.Publish, validPublishingStrategyValues))
+	}
+	if len(c.DeprecatedImageContentSources) != 0 && len(c.ImageDigestSources) != 0 {
+		allErrs = append(allErrs, field.Invalid(field.NewPath("imageContentSources"), c.Publish, "cannot set imageContentSources and imageDigestSources at the same time"))
+	}
+	if len(c.DeprecatedImageContentSources) != 0 {
+		logrus.Warningln("imageContentSources is deprecated, please use ImageDigestSources")
 	}
 	allErrs = append(allErrs, validateCloudCredentialsMode(c.CredentialsMode, field.NewPath("credentialsMode"), c.Platform)...)
 	if c.Capabilities != nil {
@@ -138,13 +163,95 @@ func ValidateInstallConfig(c *types.InstallConfig, usingAgentMethod bool) field.
 
 	if c.Publish == types.InternalPublishingStrategy {
 		switch platformName := c.Platform.Name(); platformName {
-		case aws.Name, azure.Name, gcp.Name, alibabacloud.Name, ibmcloud.Name, powervs.Name:
+		case aws.Name, azure.Name, gcp.Name, ibmcloud.Name, powervs.Name:
 		default:
 			allErrs = append(allErrs, field.Invalid(field.NewPath("publish"), c.Publish, fmt.Sprintf("Internal publish strategy is not supported on %q platform", platformName)))
 		}
 	}
 
-	allErrs = append(allErrs, validateFeatureSet(c)...)
+	if c.Publish == types.MixedPublishingStrategy {
+		switch platformName := c.Platform.Name(); platformName {
+		case azure.Name:
+		default:
+			allErrs = append(allErrs, field.Invalid(field.NewPath("publish"), c.Publish, fmt.Sprintf("mixed publish strategy is not supported on %q platform", platformName)))
+		}
+		if c.OperatorPublishingStrategy == nil {
+			allErrs = append(allErrs, field.Invalid(field.NewPath("publish"), c.Publish, "please specify the operator publishing strategy for mixed publish strategy"))
+		}
+	} else if c.OperatorPublishingStrategy != nil {
+		allErrs = append(allErrs, field.Invalid(field.NewPath("operatorPublishingStrategy"), c.Publish, "operator publishing strategy is only allowed with mixed publishing strategy installs"))
+	}
+
+	if c.OperatorPublishingStrategy != nil {
+		acceptedValues := sets.New[string]("Internal", "External")
+		if c.OperatorPublishingStrategy.APIServer == "" {
+			c.OperatorPublishingStrategy.APIServer = "External"
+		}
+		if c.OperatorPublishingStrategy.Ingress == "" {
+			c.OperatorPublishingStrategy.Ingress = "External"
+		}
+		if !acceptedValues.Has(c.OperatorPublishingStrategy.APIServer) {
+			allErrs = append(allErrs, field.NotSupported(field.NewPath("apiserver"), c.OperatorPublishingStrategy.APIServer, sets.List(acceptedValues)))
+		}
+		if !acceptedValues.Has(c.OperatorPublishingStrategy.Ingress) {
+			allErrs = append(allErrs, field.NotSupported(field.NewPath("ingress"), c.OperatorPublishingStrategy.Ingress, sets.List(acceptedValues)))
+		}
+		if c.OperatorPublishingStrategy.APIServer == "Internal" && c.OperatorPublishingStrategy.Ingress == "Internal" {
+			allErrs = append(allErrs, field.Invalid(field.NewPath("publish"), c.OperatorPublishingStrategy.APIServer, "cannot set both fields to internal in a mixed cluster, use publish internal instead"))
+		}
+	}
+
+	if c.Capabilities != nil {
+		capSet := c.Capabilities.BaselineCapabilitySet
+		if capSet == "" {
+			capSet = configv1.ClusterVersionCapabilitySetCurrent
+		}
+		enabledCaps := sets.New[configv1.ClusterVersionCapability](configv1.ClusterVersionCapabilitySets[capSet]...)
+		enabledCaps.Insert(c.Capabilities.AdditionalEnabledCapabilities...)
+
+		if c.Capabilities.BaselineCapabilitySet == configv1.ClusterVersionCapabilitySetNone {
+			enabledCaps := sets.New[configv1.ClusterVersionCapability](c.Capabilities.AdditionalEnabledCapabilities...)
+			if enabledCaps.Has(configv1.ClusterVersionCapabilityMarketplace) && !enabledCaps.Has(configv1.ClusterVersionCapabilityOperatorLifecycleManager) {
+				allErrs = append(allErrs, field.Invalid(field.NewPath("additionalEnabledCapabilities"), c.Capabilities.AdditionalEnabledCapabilities,
+					"the marketplace capability requires the OperatorLifecycleManager capability"))
+			}
+			if c.Platform.BareMetal != nil && !enabledCaps.Has(configv1.ClusterVersionCapabilityBaremetal) {
+				allErrs = append(allErrs, field.Invalid(field.NewPath("additionalEnabledCapabilities"), c.Capabilities.AdditionalEnabledCapabilities,
+					"platform baremetal requires the baremetal capability"))
+			}
+		}
+
+		if enabledCaps.Has(configv1.ClusterVersionCapabilityMarketplace) && !enabledCaps.Has(configv1.ClusterVersionCapabilityOperatorLifecycleManager) {
+			allErrs = append(allErrs, field.Invalid(field.NewPath("additionalEnabledCapabilities"), c.Capabilities.AdditionalEnabledCapabilities,
+				"the marketplace capability requires the OperatorLifecycleManager capability"))
+		}
+
+		if !enabledCaps.Has(configv1.ClusterVersionCapabilityCloudCredential) {
+			// check if platform is cloud
+			if c.None == nil && c.BareMetal == nil {
+				allErrs = append(allErrs, field.Invalid(field.NewPath("capabilities"), c.Capabilities,
+					"disabling CloudCredential capability available only for baremetal platforms"))
+			}
+		}
+
+		if !enabledCaps.Has(configv1.ClusterVersionCapabilityCloudControllerManager) {
+			if c.None == nil && c.BareMetal == nil && c.External == nil {
+				allErrs = append(allErrs, field.Invalid(field.NewPath("capabilities"), c.Capabilities,
+					"disabling CloudControllerManager is only supported on the Baremetal, None, or External platform with cloudControllerManager value none"))
+			}
+			if c.External != nil && c.External.CloudControllerManager == external.CloudControllerManagerTypeExternal {
+				allErrs = append(allErrs, field.Invalid(field.NewPath("capabilities"), c.Capabilities,
+					"disabling CloudControllerManager on External platform supported only with cloudControllerManager value none"))
+			}
+		}
+
+		if !enabledCaps.Has(configv1.ClusterVersionCapabilityIngress) {
+			allErrs = append(allErrs, field.Invalid(field.NewPath("capabilities"), c.Capabilities,
+				"the Ingress capability is required"))
+		}
+	}
+
+	allErrs = append(allErrs, ValidateFeatureSet(c)...)
 
 	return allErrs
 }
@@ -223,24 +330,27 @@ func validateNetworkingIPVersion(n *types.Networking, p *types.Platform) field.E
 
 	switch {
 	case hasIPv4 && hasIPv6:
-		if n.NetworkType == string(operv1.NetworkTypeOpenShiftSDN) {
-			allErrs = append(allErrs, field.Invalid(field.NewPath("networking", "networkType"), n.NetworkType, "dual-stack IPv4/IPv6 is not supported for this networking plugin"))
-		}
-
 		if len(n.ServiceNetwork) != 2 {
 			allErrs = append(allErrs, field.Invalid(field.NewPath("networking", "serviceNetwork"), strings.Join(ipnetworksToStrings(n.ServiceNetwork), ", "), "when installing dual-stack IPv4/IPv6 you must provide two service networks, one for each IP address type"))
 		}
 
+		allowV6Primary := false
 		experimentalDualStackEnabled, _ := strconv.ParseBool(os.Getenv("OPENSHIFT_INSTALL_EXPERIMENTAL_DUAL_STACK"))
 		switch {
 		case p.Azure != nil && experimentalDualStackEnabled:
 			logrus.Warnf("Using experimental Azure dual-stack support")
 		case p.BareMetal != nil:
+			// We now support ipv6-primary dual stack on baremetal
+			allowV6Primary = true
 		case p.VSphere != nil:
+			// as well as on vSphere
+			allowV6Primary = true
 		case p.OpenStack != nil:
+			allowV6Primary = true
 		case p.Ovirt != nil:
 		case p.Nutanix != nil:
 		case p.None != nil:
+		case p.External != nil:
 		default:
 			allErrs = append(allErrs, field.Invalid(field.NewPath("networking"), "DualStack", "dual-stack IPv4/IPv6 is not supported for this platform, specify only one type of address"))
 		}
@@ -255,16 +365,12 @@ func validateNetworkingIPVersion(n *types.Networking, p *types.Platform) field.E
 			// FIXME: we should allow either all-networks-IPv4Primary or
 			// all-networks-IPv6Primary, but the latter currently causes
 			// confusing install failures, so block it.
-			if v.IPv4 && v.IPv6 && v.Primary != corev1.IPv4Protocol {
+			if !allowV6Primary && v.IPv4 && v.IPv6 && v.Primary != corev1.IPv4Protocol {
 				allErrs = append(allErrs, field.Invalid(field.NewPath("networking", k), strings.Join(ipnetworksToStrings(addresses[k]), ", "), "IPv4 addresses must be listed before IPv6 addresses"))
 			}
 		}
 
 	case hasIPv6:
-		if n.NetworkType == string(operv1.NetworkTypeOpenShiftSDN) {
-			allErrs = append(allErrs, field.Invalid(field.NewPath("networking", "networkType"), n.NetworkType, "IPv6 is not supported for this networking plugin"))
-		}
-
 		switch {
 		case p.BareMetal != nil:
 		case p.VSphere != nil:
@@ -272,6 +378,7 @@ func validateNetworkingIPVersion(n *types.Networking, p *types.Platform) field.E
 		case p.Ovirt != nil:
 		case p.Nutanix != nil:
 		case p.None != nil:
+		case p.External != nil:
 		case p.Azure != nil && p.Azure.CloudName == azure.StackCloud:
 			allErrs = append(allErrs, field.Invalid(field.NewPath("networking"), "IPv6", "Azure Stack does not support IPv6"))
 		default:
@@ -296,8 +403,14 @@ func validateNetworking(n *types.Networking, singleNodeOpenShift bool, fldPath *
 		allErrs = append(allErrs, field.Required(fldPath.Child("networkType"), "network provider type required"))
 	}
 
-	if singleNodeOpenShift && n.NetworkType == string(operv1.NetworkTypeOpenShiftSDN) {
-		allErrs = append(allErrs, field.Invalid(fldPath.Child("networkType"), n.NetworkType, "networkType OpenShiftSDN is currently not supported on Single Node OpenShift"))
+	// NOTE(dulek): We're hardcoding "Kuryr" here as the plan is to remove it from the API very soon. We can remove
+	//              this check once some more general validation of the supported NetworkTypes is in place.
+	if n.NetworkType == "Kuryr" {
+		allErrs = append(allErrs, field.Invalid(fldPath.Child("networkType"), n.NetworkType, "networkType Kuryr is not supported on OpenShift later than 4.14"))
+	}
+
+	if n.NetworkType == string(operv1.NetworkTypeOpenShiftSDN) {
+		allErrs = append(allErrs, field.Invalid(fldPath.Child("networkType"), n.NetworkType, "networkType OpenShiftSDN is not supported, please use OVNKubernetes"))
 	}
 
 	if len(n.MachineNetwork) > 0 {
@@ -346,23 +459,6 @@ func validateNetworking(n *types.Networking, singleNodeOpenShift bool, fldPath *
 func validateNetworkingForPlatform(n *types.Networking, platform *types.Platform, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 	switch {
-	case platform.Libvirt != nil:
-		errMsg := "overlaps with default Docker Bridge subnet"
-		for idx, mn := range n.MachineNetwork {
-			if validate.DoCIDRsOverlap(&mn.CIDR.IPNet, validate.DockerBridgeCIDR) {
-				allErrs = append(allErrs, field.Invalid(fldPath.Child("machineNewtork").Index(idx), mn.CIDR.String(), errMsg))
-			}
-		}
-		for idx, sn := range n.ServiceNetwork {
-			if validate.DoCIDRsOverlap(&sn.IPNet, validate.DockerBridgeCIDR) {
-				allErrs = append(allErrs, field.Invalid(fldPath.Child("serviceNetwork").Index(idx), sn.String(), errMsg))
-			}
-		}
-		for idx, cn := range n.ClusterNetwork {
-			if validate.DoCIDRsOverlap(&cn.CIDR.IPNet, validate.DockerBridgeCIDR) {
-				allErrs = append(allErrs, field.Invalid(fldPath.Child("clusterNetwork").Index(idx), cn.CIDR.String(), errMsg))
-			}
-		}
 	default:
 		warningMsgFmt := "%s: %s overlaps with default Docker Bridge subnet"
 		for idx, mn := range n.MachineNetwork {
@@ -418,6 +514,88 @@ func validateClusterNetwork(n *types.Networking, cn *types.ClusterNetworkEntry, 
 	return allErrs
 }
 
+func validateNetworkingClusterNetworkMTU(c *types.InstallConfig, fldPath *field.Path) field.ErrorList {
+	// higherLimitMTUVPC is the MTU limit for AWS VPC.
+	// https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/network_mtu.html#jumbo_frame_instances
+	// https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/network_mtu.html
+	const higherLimitMTUVPC uint32 = uint32(9001)
+
+	// lowerLimitMTUVPC is the lower limit to prevent users setting too low values impacting in the
+	// cluster network performance. Tested values with 1100 decreases 70% in the network performance
+	// in AWS deployments:
+	const lowerLimitMTUVPC uint32 = uint32(1000)
+
+	// higherLimitMTUEdge defines the maximium generally supported MTU in AWS Local and Wavelength Zones.
+	// Mostly AWS Local or Wavelength zones have limited MTU between those and in the Region.
+	// It is required to raise a warning message when the user-defined MTU is higher than general supported.
+	// https://docs.aws.amazon.com/local-zones/latest/ug/how-local-zones-work.html#considerations
+	// https://docs.aws.amazon.com/wavelength/latest/developerguide/how-wavelengths-work.html
+	const higherLimitMTUEdge uint32 = uint32(1300)
+
+	// MTU overhead for the network plugin OVNKubernetes.
+	// https://docs.openshift.com/container-platform/4.14/networking/changing-cluster-network-mtu.html#mtu-value-selection_changing-cluster-network-mtu
+	const minOverheadOVN uint32 = uint32(100)
+
+	allErrs := field.ErrorList{}
+
+	if c.Networking == nil {
+		return nil
+	}
+
+	if c.Networking.ClusterNetworkMTU == 0 {
+		return nil
+	}
+
+	if c.Platform.Name() != aws.Name {
+		return append(allErrs, field.Invalid(fldPath, int(c.Networking.ClusterNetworkMTU), "cluster network MTU is allowed only in AWS deployments"))
+	}
+
+	network := c.NetworkType
+	mtu := c.Networking.ClusterNetworkMTU
+
+	// Calculating the MTU limits considering the base overhead for each network plugin.
+	limitEdgeOVNKubernetes := higherLimitMTUEdge - minOverheadOVN
+	limitOVNKubernetes := higherLimitMTUVPC - minOverheadOVN
+
+	if mtu > higherLimitMTUVPC {
+		return append(allErrs, field.Invalid(fldPath, int(mtu), fmt.Sprintf("cluster network MTU exceeds the maximum value of %d", higherLimitMTUVPC)))
+	}
+
+	// Prevent too low MTU values.
+	// Tests in AWS Local Zones with MTU of 1100 decreased the network
+	// performance in 70%. The check protects the cluster stability from
+	// user defining too lower numbers.
+	// https://issues.redhat.com/browse/OCPBUGS-11098
+	if mtu < lowerLimitMTUVPC {
+		return append(allErrs, field.Invalid(fldPath, int(mtu), fmt.Sprintf("cluster network MTU is lower than the minimum value of %d", lowerLimitMTUVPC)))
+	}
+
+	hasEdgePool := false
+	warnEdgePool := false
+	for _, compute := range c.Compute {
+		if compute.Name == types.MachinePoolEdgeRoleName {
+			hasEdgePool = true
+			break
+		}
+	}
+
+	if network != string(operv1.NetworkTypeOVNKubernetes) {
+		return append(allErrs, field.Invalid(fldPath, int(mtu), fmt.Sprintf("cluster network MTU is not valid with network plugin %s", network)))
+	}
+
+	if mtu > limitOVNKubernetes {
+		return append(allErrs, field.Invalid(fldPath, int(mtu), fmt.Sprintf("cluster network MTU exceeds the maximum value with the network plugin %s of %d", network, limitOVNKubernetes)))
+	}
+	if hasEdgePool && (mtu > limitEdgeOVNKubernetes) {
+		warnEdgePool = true
+	}
+	if warnEdgePool {
+		logrus.Warnf("networking.ClusterNetworkMTU exceeds the maximum value generally supported by AWS Local or Wavelength zones. Please ensure all AWS Zones defined in the edge compute pool accepts the MTU %d bytes between nodes (EC2) in the zone and in the Region.", mtu)
+	}
+
+	return allErrs
+}
+
 func validateControlPlane(platform *types.Platform, pool *types.MachinePool, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 	if pool.Name != types.MachinePoolControlPlaneRoleName {
@@ -430,19 +608,33 @@ func validateControlPlane(platform *types.Platform, pool *types.MachinePool, fld
 	return allErrs
 }
 
-func validateCompute(platform *types.Platform, control *types.MachinePool, pools []types.MachinePool, fldPath *field.Path) field.ErrorList {
+func validateComputeEdge(platform *types.Platform, pName string, fldPath *field.Path, pfld *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+	if platform.Name() != aws.Name {
+		allErrs = append(allErrs, field.NotSupported(pfld.Child("name"), pName, []string{types.MachinePoolComputeRoleName}))
+	}
+
+	return allErrs
+}
+
+func validateCompute(platform *types.Platform, control *types.MachinePool, pools []types.MachinePool, fldPath *field.Path, isMultiArchEnabled bool) field.ErrorList {
 	allErrs := field.ErrorList{}
 	poolNames := map[string]bool{}
 	for i, p := range pools {
 		poolFldPath := fldPath.Index(i)
-		if p.Name != types.MachinePoolComputeRoleName {
-			allErrs = append(allErrs, field.NotSupported(poolFldPath.Child("name"), p.Name, []string{"worker"}))
+		switch p.Name {
+		case types.MachinePoolComputeRoleName:
+		case types.MachinePoolEdgeRoleName:
+			allErrs = append(allErrs, validateComputeEdge(platform, p.Name, poolFldPath, poolFldPath)...)
+		default:
+			allErrs = append(allErrs, field.NotSupported(poolFldPath.Child("name"), p.Name, []string{types.MachinePoolComputeRoleName, types.MachinePoolEdgeRoleName}))
 		}
+
 		if poolNames[p.Name] {
 			allErrs = append(allErrs, field.Duplicate(poolFldPath.Child("name"), p.Name))
 		}
 		poolNames[p.Name] = true
-		if control != nil && control.Architecture != p.Architecture {
+		if control != nil && control.Architecture != p.Architecture && !isMultiArchEnabled {
 			allErrs = append(allErrs, field.Invalid(poolFldPath.Child("architecture"), p.Architecture, "heteregeneous multi-arch is not supported; compute pool architecture must match control plane"))
 		}
 		allErrs = append(allErrs, ValidateMachinePool(platform, &p, poolFldPath)...)
@@ -473,17 +665,21 @@ func validateVIPsForPlatform(network *types.Networking, platform *types.Platform
 		APIVIPs:     "apiVIPs",
 		IngressVIPs: "ingressVIPs",
 	}
+
+	var lbType configv1.PlatformLoadBalancerType
+
 	switch {
 	case platform.BareMetal != nil:
-		allErrs = append(allErrs, ensureIPv4IsFirstInDualStackSlice(&platform.BareMetal.APIVIPs, fldPath.Child(baremetal.Name, newVIPsFields.APIVIPs))...)
-		allErrs = append(allErrs, ensureIPv4IsFirstInDualStackSlice(&platform.BareMetal.IngressVIPs, fldPath.Child(baremetal.Name, newVIPsFields.IngressVIPs))...)
-
 		virtualIPs = vips{
 			API:     platform.BareMetal.APIVIPs,
 			Ingress: platform.BareMetal.IngressVIPs,
 		}
 
-		allErrs = append(allErrs, validateAPIAndIngressVIPs(virtualIPs, newVIPsFields, true, network, fldPath.Child(baremetal.Name))...)
+		if platform.BareMetal.LoadBalancer != nil {
+			lbType = platform.BareMetal.LoadBalancer.Type
+		}
+
+		allErrs = append(allErrs, validateAPIAndIngressVIPs(virtualIPs, newVIPsFields, true, true, lbType, network, fldPath.Child(baremetal.Name))...)
 	case platform.Nutanix != nil:
 		allErrs = append(allErrs, ensureIPv4IsFirstInDualStackSlice(&platform.Nutanix.APIVIPs, fldPath.Child(nutanix.Name, newVIPsFields.APIVIPs))...)
 		allErrs = append(allErrs, ensureIPv4IsFirstInDualStackSlice(&platform.Nutanix.IngressVIPs, fldPath.Child(nutanix.Name, newVIPsFields.IngressVIPs))...)
@@ -493,27 +689,33 @@ func validateVIPsForPlatform(network *types.Networking, platform *types.Platform
 			Ingress: platform.Nutanix.IngressVIPs,
 		}
 
-		allErrs = append(allErrs, validateAPIAndIngressVIPs(virtualIPs, newVIPsFields, false, network, fldPath.Child(nutanix.Name))...)
-	case platform.OpenStack != nil:
-		allErrs = append(allErrs, ensureIPv4IsFirstInDualStackSlice(&platform.OpenStack.APIVIPs, fldPath.Child(openstack.Name, newVIPsFields.APIVIPs))...)
-		allErrs = append(allErrs, ensureIPv4IsFirstInDualStackSlice(&platform.OpenStack.IngressVIPs, fldPath.Child(openstack.Name, newVIPsFields.IngressVIPs))...)
+		if platform.Nutanix.LoadBalancer != nil {
+			lbType = platform.Nutanix.LoadBalancer.Type
+		}
 
+		allErrs = append(allErrs, validateAPIAndIngressVIPs(virtualIPs, newVIPsFields, false, false, lbType, network, fldPath.Child(nutanix.Name))...)
+	case platform.OpenStack != nil:
 		virtualIPs = vips{
 			API:     platform.OpenStack.APIVIPs,
 			Ingress: platform.OpenStack.IngressVIPs,
 		}
 
-		allErrs = append(allErrs, validateAPIAndIngressVIPs(virtualIPs, newVIPsFields, true, network, fldPath.Child(openstack.Name))...)
-	case platform.VSphere != nil:
-		allErrs = append(allErrs, ensureIPv4IsFirstInDualStackSlice(&platform.VSphere.APIVIPs, fldPath.Child(vsphere.Name, newVIPsFields.APIVIPs))...)
-		allErrs = append(allErrs, ensureIPv4IsFirstInDualStackSlice(&platform.VSphere.IngressVIPs, fldPath.Child(vsphere.Name, newVIPsFields.IngressVIPs))...)
+		if platform.OpenStack.LoadBalancer != nil {
+			lbType = platform.OpenStack.LoadBalancer.Type
+		}
 
+		allErrs = append(allErrs, validateAPIAndIngressVIPs(virtualIPs, newVIPsFields, true, true, lbType, network, fldPath.Child(openstack.Name))...)
+	case platform.VSphere != nil:
 		virtualIPs = vips{
 			API:     platform.VSphere.APIVIPs,
 			Ingress: platform.VSphere.IngressVIPs,
 		}
 
-		allErrs = append(allErrs, validateAPIAndIngressVIPs(virtualIPs, newVIPsFields, false, network, fldPath.Child(vsphere.Name))...)
+		if platform.VSphere.LoadBalancer != nil {
+			lbType = platform.VSphere.LoadBalancer.Type
+		}
+
+		allErrs = append(allErrs, validateAPIAndIngressVIPs(virtualIPs, newVIPsFields, false, false, lbType, network, fldPath.Child(vsphere.Name))...)
 	case platform.Ovirt != nil:
 		allErrs = append(allErrs, ensureIPv4IsFirstInDualStackSlice(&platform.Ovirt.APIVIPs, fldPath.Child(ovirt.Name, newVIPsFields.APIVIPs))...)
 		allErrs = append(allErrs, ensureIPv4IsFirstInDualStackSlice(&platform.Ovirt.IngressVIPs, fldPath.Child(ovirt.Name, newVIPsFields.IngressVIPs))...)
@@ -527,7 +729,11 @@ func validateVIPsForPlatform(network *types.Networking, platform *types.Platform
 			Ingress: platform.Ovirt.IngressVIPs,
 		}
 
-		allErrs = append(allErrs, validateAPIAndIngressVIPs(virtualIPs, newVIPsFields, true, network, fldPath.Child(ovirt.Name))...)
+		if platform.Ovirt.LoadBalancer != nil {
+			lbType = platform.Ovirt.LoadBalancer.Type
+		}
+
+		allErrs = append(allErrs, validateAPIAndIngressVIPs(virtualIPs, newVIPsFields, true, true, lbType, network, fldPath.Child(ovirt.Name))...)
 	default:
 		//no vips to validate on this platform
 	}
@@ -558,7 +764,9 @@ func ensureIPv4IsFirstInDualStackSlice(vips *[]string, fldPath *field.Path) fiel
 }
 
 // validateAPIAndIngressVIPs validates the API and Ingress VIPs
-func validateAPIAndIngressVIPs(vips vips, fieldNames vipFields, vipIsRequired bool, n *types.Networking, fldPath *field.Path) field.ErrorList {
+//
+//nolint:gocyclo
+func validateAPIAndIngressVIPs(vips vips, fieldNames vipFields, vipIsRequired, reqVIPinMachineCIDR bool, lbType configv1.PlatformLoadBalancerType, n *types.Networking, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
 	if len(vips.API) == 0 {
@@ -571,21 +779,21 @@ func validateAPIAndIngressVIPs(vips vips, fieldNames vipFields, vipIsRequired bo
 				allErrs = append(allErrs, field.Invalid(fldPath.Child(fieldNames.APIVIPs), vip, err.Error()))
 			}
 
-			for _, ingressVIP := range vips.Ingress {
-				apiVIPNet := net.ParseIP(vip)
-				ingressVIPNet := net.ParseIP(ingressVIP)
+			// When using user-managed loadbalancer we do not require API and Ingress VIP to be different as well as
+			// we allow them to be from outside the machine network CIDR.
+			if lbType != configv1.LoadBalancerTypeUserManaged {
+				for _, ingressVIP := range vips.Ingress {
+					apiVIPNet := net.ParseIP(vip)
+					ingressVIPNet := net.ParseIP(ingressVIP)
 
-				if apiVIPNet.Equal(ingressVIPNet) {
-					allErrs = append(allErrs, field.Invalid(fldPath.Child(fieldNames.APIVIPs), vip, "VIP for API must not be one of the Ingress VIPs"))
+					if apiVIPNet.Equal(ingressVIPNet) {
+						allErrs = append(allErrs, field.Invalid(fldPath.Child(fieldNames.APIVIPs), vip, "VIP for API must not be one of the Ingress VIPs"))
+					}
 				}
-			}
 
-			if err := ValidateIPinMachineCIDR(vip, n); err != nil {
-				allErrs = append(allErrs, field.Invalid(fldPath.Child(fieldNames.APIVIPs), vip, err.Error()))
-			}
-
-			if utilsnet.IsIPv6String(vip) && n.NetworkType == string(operv1.NetworkTypeOpenShiftSDN) {
-				allErrs = append(allErrs, field.Invalid(fldPath.Child(fieldNames.APIVIPs), vip, "IPv6 is not supported on OpenShiftSDN"))
+				if err := ValidateIPinMachineCIDR(vip, n); reqVIPinMachineCIDR && err != nil {
+					allErrs = append(allErrs, field.Invalid(fldPath.Child(fieldNames.APIVIPs), vip, err.Error()))
+				}
 			}
 		}
 
@@ -623,12 +831,12 @@ func validateAPIAndIngressVIPs(vips vips, fieldNames vipFields, vipIsRequired bo
 				allErrs = append(allErrs, field.Invalid(fldPath.Child(fieldNames.IngressVIPs), vip, err.Error()))
 			}
 
-			if err := ValidateIPinMachineCIDR(vip, n); err != nil {
-				allErrs = append(allErrs, field.Invalid(fldPath.Child(fieldNames.IngressVIPs), vip, err.Error()))
-			}
-
-			if utilsnet.IsIPv6String(vip) && n.NetworkType == string(operv1.NetworkTypeOpenShiftSDN) {
-				allErrs = append(allErrs, field.Invalid(fldPath.Child(fieldNames.IngressVIPs), vip, "IPv6 is not supported on OpenShiftSDN"))
+			// When using user-managed loadbalancer we do not require API and Ingress VIP to be different as well as
+			// we allow them to be from outside the machine network CIDR.
+			if lbType != configv1.LoadBalancerTypeUserManaged {
+				if err := ValidateIPinMachineCIDR(vip, n); reqVIPinMachineCIDR && err != nil {
+					allErrs = append(allErrs, field.Invalid(fldPath.Child(fieldNames.IngressVIPs), vip, err.Error()))
+				}
 			}
 		}
 
@@ -690,17 +898,14 @@ func validatePlatform(platform *types.Platform, usingAgentMethod bool, fldPath *
 		}
 		allErrs = append(allErrs, validation(fldPath.Child(n))...)
 	}
-	if platform.AlibabaCloud != nil {
-		validate(alibabacloud.Name, platform.AlibabaCloud, func(f *field.Path) field.ErrorList {
-			return alibabacloudvalidation.ValidatePlatform(platform.AlibabaCloud, network, f)
-		})
-	}
 	if platform.AWS != nil {
-		validate(aws.Name, platform.AWS, func(f *field.Path) field.ErrorList { return awsvalidation.ValidatePlatform(platform.AWS, f) })
+		validate(aws.Name, platform.AWS, func(f *field.Path) field.ErrorList {
+			return awsvalidation.ValidatePlatform(platform.AWS, c.CredentialsMode, f)
+		})
 	}
 	if platform.Azure != nil {
 		validate(azure.Name, platform.Azure, func(f *field.Path) field.ErrorList {
-			return azurevalidation.ValidatePlatform(platform.Azure, c.Publish, f)
+			return azurevalidation.ValidatePlatform(platform.Azure, c.Publish, f, c)
 		})
 	}
 	if platform.GCP != nil {
@@ -709,16 +914,18 @@ func validatePlatform(platform *types.Platform, usingAgentMethod bool, fldPath *
 	if platform.IBMCloud != nil {
 		validate(ibmcloud.Name, platform.IBMCloud, func(f *field.Path) field.ErrorList { return ibmcloudvalidation.ValidatePlatform(platform.IBMCloud, f) })
 	}
-	if platform.Libvirt != nil {
-		validate(libvirt.Name, platform.Libvirt, func(f *field.Path) field.ErrorList { return libvirtvalidation.ValidatePlatform(platform.Libvirt, f) })
-	}
 	if platform.OpenStack != nil {
 		validate(openstack.Name, platform.OpenStack, func(f *field.Path) field.ErrorList {
 			return openstackvalidation.ValidatePlatform(platform.OpenStack, network, f, c)
 		})
 	}
 	if platform.PowerVS != nil {
-		validate(powervs.Name, platform.PowerVS, func(f *field.Path) field.ErrorList { return powervsvalidation.ValidatePlatform(platform.PowerVS, f) })
+		if c.SSHKey == "" {
+			allErrs = append(allErrs, field.Required(field.NewPath("sshKey"), "sshKey is required"))
+		}
+		validate(powervs.Name, platform.PowerVS, func(f *field.Path) field.ErrorList {
+			return powervsvalidation.ValidatePlatform(platform.PowerVS, f)
+		})
 	}
 	if platform.VSphere != nil {
 		validate(vsphere.Name, platform.VSphere, func(f *field.Path) field.ErrorList {
@@ -799,6 +1006,24 @@ func validateImageContentSources(groups []types.ImageContentSource, fldPath *fie
 	return allErrs
 }
 
+func validateImageDigestSources(groups []types.ImageDigestSource, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+	for gidx, group := range groups {
+		groupf := fldPath.Index(gidx)
+		if err := validateNamedRepository(group.Source); err != nil {
+			allErrs = append(allErrs, field.Invalid(groupf.Child("source"), group.Source, err.Error()))
+		}
+
+		for midx, mirror := range group.Mirrors {
+			if err := validateNamedRepository(mirror); err != nil {
+				allErrs = append(allErrs, field.Invalid(groupf.Child("mirrors").Index(midx), mirror, err.Error()))
+				continue
+			}
+		}
+	}
+	return allErrs
+}
+
 func validateNamedRepository(r string) error {
 	ref, err := dockerref.ParseNamed(r)
 	if err != nil {
@@ -831,6 +1056,7 @@ var (
 	validPublishingStrategies = map[types.PublishingStrategy]struct{}{
 		types.ExternalPublishingStrategy: {},
 		types.InternalPublishingStrategy: {},
+		types.MixedPublishingStrategy:    {},
 	}
 
 	validPublishingStrategyValues = func() []string {
@@ -857,13 +1083,12 @@ func validateCloudCredentialsMode(mode types.CredentialsMode, fldPath *field.Pat
 	// validPlatformCredentialsModes is a map from the platform name to a slice of credentials modes that are valid
 	// for the platform. If a platform name is not in the map, then the credentials mode cannot be set for that platform.
 	validPlatformCredentialsModes := map[string][]types.CredentialsMode{
-		alibabacloud.Name: {types.ManualCredentialsMode},
-		aws.Name:          {types.MintCredentialsMode, types.PassthroughCredentialsMode, types.ManualCredentialsMode},
-		azure.Name:        allowedAzureModes,
-		gcp.Name:          {types.MintCredentialsMode, types.PassthroughCredentialsMode, types.ManualCredentialsMode},
-		ibmcloud.Name:     {types.ManualCredentialsMode},
-		powervs.Name:      {types.ManualCredentialsMode},
-		nutanix.Name:      {types.ManualCredentialsMode},
+		aws.Name:      {types.MintCredentialsMode, types.PassthroughCredentialsMode, types.ManualCredentialsMode},
+		azure.Name:    allowedAzureModes,
+		gcp.Name:      {types.MintCredentialsMode, types.PassthroughCredentialsMode, types.ManualCredentialsMode},
+		ibmcloud.Name: {types.ManualCredentialsMode},
+		powervs.Name:  {types.ManualCredentialsMode},
+		nutanix.Name:  {types.ManualCredentialsMode},
 	}
 	if validModes, ok := validPlatformCredentialsModes[platform.Name()]; ok {
 		validModesSet := sets.NewString()
@@ -931,14 +1156,28 @@ func validateIPProxy(proxy string, n *types.Networking, fldPath *field.Path) fie
 // for ssh keys on FIPS.
 func validateFIPSconfig(c *types.InstallConfig) field.ErrorList {
 	allErrs := field.ErrorList{}
-	sshParsedKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(c.SSHKey))
-	if err != nil {
-		allErrs = append(allErrs, field.Invalid(field.NewPath("sshKey"), c.SSHKey, fmt.Sprintf("Fatal error trying to parse configured public key: %s", err)))
-	} else {
-		sshKeyType := sshParsedKey.Type()
-		re := regexp.MustCompile(`^ecdsa-sha2-nistp\d{3}$|^ssh-rsa$`)
-		if !re.MatchString(sshKeyType) {
-			allErrs = append(allErrs, field.Invalid(field.NewPath("sshKey"), c.SSHKey, fmt.Sprintf("SSH key type %s unavailable when FIPS is enabled. Please use rsa or ecdsa.", sshKeyType)))
+	if c.SSHKey != "" {
+		sshParsedKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(c.SSHKey))
+		if err != nil {
+			allErrs = append(allErrs, field.Invalid(field.NewPath("sshKey"), c.SSHKey, fmt.Sprintf("Fatal error trying to parse configured public key: %s", err)))
+		} else {
+			sshKeyType := sshParsedKey.Type()
+			re := regexp.MustCompile(`^ecdsa-sha2-nistp\d{3}$|^ssh-rsa$`)
+			if !re.MatchString(sshKeyType) {
+				allErrs = append(allErrs, field.Invalid(field.NewPath("sshKey"), c.SSHKey, fmt.Sprintf("SSH key type %s unavailable when FIPS is enabled. Please use rsa or ecdsa.", sshKeyType)))
+			}
+		}
+	}
+
+	if err := hostcrypt.VerifyHostTargetState(c.FIPS); err != nil {
+		if skip, ok := os.LookupEnv("OPENSHIFT_INSTALL_SKIP_HOSTCRYPT_VALIDATION"); ok && skip != "" {
+			logrus.Warnf("%v", err)
+			if c.Annotations == nil {
+				c.Annotations = make(map[string]string)
+			}
+			c.Annotations[hostCryptBypassedAnnotation] = "true"
+		} else {
+			allErrs = append(allErrs, field.Forbidden(field.NewPath("fips"), err.Error()))
 		}
 	}
 	return allErrs
@@ -981,27 +1220,126 @@ func validateAdditionalCABundlePolicy(c *types.InstallConfig) error {
 	}
 }
 
-// validateFeatureSet returns an error if a gated feature is used without opting into the feature set.
-func validateFeatureSet(c *types.InstallConfig) field.ErrorList {
+// ValidateFeatureSet returns an error if a gated feature is used without opting into the feature set.
+func ValidateFeatureSet(c *types.InstallConfig) field.ErrorList {
 	allErrs := field.ErrorList{}
 
-	if _, ok := configv1.FeatureSets[c.FeatureSet]; !ok {
+	clusterProfile := types.GetClusterProfileName()
+	featureSets, ok := features.AllFeatureSets()[clusterProfile]
+	if !ok {
+		logrus.Warnf("no feature sets for cluster profile %q", clusterProfile)
+	}
+	if _, ok := featureSets[c.FeatureSet]; c.FeatureSet != configv1.CustomNoUpgrade && !ok {
 		sortedFeatureSets := func() []string {
 			v := []string{}
-			for n := range configv1.FeatureSets {
+			for n := range features.AllFeatureSets()[clusterProfile] {
 				v = append(v, string(n))
 			}
+			// Add CustomNoUpgrade since it is not part of features sets for profiles
+			v = append(v, string(configv1.CustomNoUpgrade))
 			sort.Strings(v)
 			return v
 		}()
 		allErrs = append(allErrs, field.NotSupported(field.NewPath("featureSet"), c.FeatureSet, sortedFeatureSets))
 	}
 
-	if c.FeatureSet != configv1.TechPreviewNoUpgrade {
-		errMsg := "the TechPreviewNoUpgrade feature set must be enabled to use this field"
+	if len(c.FeatureGates) > 0 {
+		if c.FeatureSet != configv1.CustomNoUpgrade {
+			allErrs = append(allErrs, field.Forbidden(field.NewPath("featureGates"), "featureGates can only be used with the CustomNoUpgrade feature set"))
+		}
+		allErrs = append(allErrs, validateCustomFeatureGates(c)...)
+	}
 
-		if c.Azure != nil && len(c.Azure.UserTags) > 0 {
-			allErrs = append(allErrs, field.Forbidden(field.NewPath("platform", "azure", "userTags"), errMsg))
+	// We can only accurately check gated features
+	// if feature sets are correctly configured.
+	if len(allErrs) == 0 {
+		allErrs = append(allErrs, validateGatedFeatures(c)...)
+	}
+
+	return allErrs
+}
+
+// validateCustomFeatureGates checks that all provided custom features match the expected format.
+// The expected format is <FeatureName>=<Enabled>.
+func validateCustomFeatureGates(c *types.InstallConfig) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	for i, rawFeature := range c.FeatureGates {
+		featureParts := strings.Split(rawFeature, "=")
+		if len(featureParts) != 2 {
+			allErrs = append(allErrs, field.Invalid(field.NewPath("featureGates").Index(i), rawFeature, "must match the format <feature-name>=<bool>"))
+			continue
+		}
+
+		if _, err := strconv.ParseBool(featureParts[1]); err != nil {
+			allErrs = append(allErrs, field.Invalid(field.NewPath("featureGates").Index(i), rawFeature, "must match the format <feature-name>=<bool>, could not parse boolean value"))
+		}
+	}
+
+	return allErrs
+}
+
+// validateGatedFeatures ensures that any gated features used in
+// the install config are enabled.
+func validateGatedFeatures(c *types.InstallConfig) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	gatedFeatures := []featuregates.GatedInstallConfigFeature{}
+	switch {
+	case c.GCP != nil:
+		gatedFeatures = append(gatedFeatures, gcpvalidation.GatedFeatures(c)...)
+	case c.VSphere != nil:
+		gatedFeatures = append(gatedFeatures, vspherevalidation.GatedFeatures(c)...)
+	}
+
+	fg := c.EnabledFeatureGates()
+	errMsgTemplate := "this field is protected by the %s feature gate which must be enabled through either the TechPreviewNoUpgrade or CustomNoUpgrade feature set"
+
+	fgCheck := func(c featuregates.GatedInstallConfigFeature) {
+		if !fg.Enabled(c.FeatureGateName) && c.Condition {
+			errMsg := fmt.Sprintf(errMsgTemplate, c.FeatureGateName)
+			allErrs = append(allErrs, field.Forbidden(c.Field, errMsg))
+		}
+	}
+
+	for _, gf := range gatedFeatures {
+		fgCheck(gf)
+	}
+
+	return allErrs
+}
+
+// validateReleaseArchitecture ensures a compatible payload is used according to the desired architecture of the cluster.
+func validateReleaseArchitecture(controlPlanePool *types.MachinePool, computePool []types.MachinePool, releaseArch types.Architecture) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	clusterArch := version.DefaultArch()
+	if controlPlanePool != nil && controlPlanePool.Architecture != "" {
+		clusterArch = controlPlanePool.Architecture
+	}
+
+	switch releaseArch {
+	case "multi":
+		// All good
+	case "unknown":
+		for _, p := range computePool {
+			if p.Architecture != "" && clusterArch != p.Architecture {
+				// Overriding release architecture is a must during dev/CI so just log a warning instead of erroring out
+				logrus.Warnln("Could not determine release architecture for multi arch cluster configuration. Make sure the release is a multi architecture payload.")
+				break
+			}
+		}
+	default:
+		if clusterArch != releaseArch {
+			errMsg := fmt.Sprintf("cannot create %s controlPlane node from a single architecture %s release payload", clusterArch, releaseArch)
+			allErrs = append(allErrs, field.Invalid(field.NewPath("controlPlane", "architecture"), clusterArch, errMsg))
+		}
+		for i, p := range computePool {
+			poolFldPath := field.NewPath("compute").Index(i)
+			if p.Architecture != "" && p.Architecture != releaseArch {
+				errMsg := fmt.Sprintf("cannot create %s compute node from a single architecture %s release payload", p.Architecture, releaseArch)
+				allErrs = append(allErrs, field.Invalid(poolFldPath.Child("architecture"), p.Architecture, errMsg))
+			}
 		}
 	}
 

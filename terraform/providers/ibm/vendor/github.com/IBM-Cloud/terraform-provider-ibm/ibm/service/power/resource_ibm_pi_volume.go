@@ -5,9 +5,9 @@ package power
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
@@ -16,6 +16,7 @@ import (
 
 	st "github.com/IBM-Cloud/power-go-client/clients/instance"
 	"github.com/IBM-Cloud/power-go-client/helpers"
+	"github.com/IBM-Cloud/power-go-client/power/client/p_cloud_volumes"
 	"github.com/IBM-Cloud/power-go-client/power/models"
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/conns"
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/flex"
@@ -50,7 +51,7 @@ func ResourceIBMPIVolume() *schema.Resource {
 			helpers.PIVolumeShareable: {
 				Type:        schema.TypeBool,
 				Optional:    true,
-				Description: "Flag to indicate if the volume can be shared across multiple instances?",
+				Description: "Flag to indicate if the volume can be shared across multiple instances.",
 			},
 			helpers.PIVolumeSize: {
 				Type:        schema.TypeFloat,
@@ -61,16 +62,16 @@ func ResourceIBMPIVolume() *schema.Resource {
 				Type:             schema.TypeString,
 				Optional:         true,
 				Computed:         true,
-				ValidateFunc:     validate.ValidateAllowedStringValues([]string{"ssd", "standard", "tier1", "tier3"}),
+				ValidateFunc:     validate.ValidateAllowedStringValues([]string{"tier0", "tier1", "tier3", "tier5k"}),
 				DiffSuppressFunc: flex.ApplyOnce,
-				Description:      "Type of Disk, required if pi_affinity_policy and pi_volume_pool not provided, otherwise ignored",
+				Description:      "Type of disk, if disk type is not provided the disk type will default to tier3",
 			},
 			helpers.PIVolumePool: {
 				Type:             schema.TypeString,
 				Optional:         true,
 				Computed:         true,
 				DiffSuppressFunc: flex.ApplyOnce,
-				Description:      "Volume pool where the volume will be created; if provided then pi_volume_type and pi_affinity_policy values will be ignored",
+				Description:      "Volume pool where the volume will be created; if provided then pi_affinity_policy values will be ignored",
 			},
 			PIAffinityPolicy: {
 				Type:             schema.TypeString,
@@ -109,6 +110,12 @@ func ResourceIBMPIVolume() *schema.Resource {
 				Description:      "List of pvmInstances to base volume anti-affinity policy against; required if requesting anti-affinity and pi_anti_affinity_volumes is not provided",
 				ConflictsWith:    []string{PIAntiAffinityVolumes},
 			},
+			helpers.PIReplicationEnabled: {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Computed:    true,
+				Description: "Indicates if the volume should be replication enabled or not",
+			},
 
 			// Computed Attributes
 			"volume_id": {
@@ -131,6 +138,56 @@ func ResourceIBMPIVolume() *schema.Resource {
 				Type:        schema.TypeString,
 				Computed:    true,
 				Description: "WWN Of the volume",
+			},
+			"auxiliary": {
+				Type:        schema.TypeBool,
+				Computed:    true,
+				Description: "true if volume is auxiliary otherwise false",
+			},
+			"consistency_group_name": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Consistency Group Name if volume is a part of volume group",
+			},
+			"group_id": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Volume Group ID",
+			},
+			"replication_type": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Replication type(metro,global)",
+			},
+			"replication_status": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Replication status of a volume",
+			},
+			"mirroring_state": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Mirroring state for replication enabled volume",
+			},
+			"primary_role": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Indicates whether master/aux volume is playing the primary role",
+			},
+			"auxiliary_volume_name": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Indicates auxiliary volume name",
+			},
+			"master_volume_name": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Indicates master volume name",
+			},
+			"io_throttle_rate": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Amount of iops assigned to the volume",
 			},
 		},
 	}
@@ -177,6 +234,10 @@ func resourceIBMPIVolumeCreate(ctx context.Context, d *schema.ResourceData, meta
 	if v, ok := d.GetOk(helpers.PIVolumePool); ok {
 		volumePool := v.(string)
 		body.VolumePool = volumePool
+	}
+	if v, ok := d.GetOk(helpers.PIReplicationEnabled); ok {
+		replicationEnabled := v.(bool)
+		body.ReplicationEnabled = &replicationEnabled
 	}
 	if ap, ok := d.GetOk(PIAffinityPolicy); ok {
 		policy := ap.(string)
@@ -249,11 +310,22 @@ func resourceIBMPIVolumeRead(ctx context.Context, d *schema.ResourceData, meta i
 	if vol.VolumeID != nil {
 		d.Set("volume_id", vol.VolumeID)
 	}
+	d.Set(helpers.PIReplicationEnabled, vol.ReplicationEnabled)
+	d.Set("auxiliary", vol.Auxiliary)
+	d.Set("consistency_group_name", vol.ConsistencyGroupName)
+	d.Set("group_id", vol.GroupID)
+	d.Set("replication_type", vol.ReplicationType)
+	d.Set("replication_status", vol.ReplicationStatus)
+	d.Set("mirroring_state", vol.MirroringState)
+	d.Set("primary_role", vol.PrimaryRole)
+	d.Set("master_volume_name", vol.MasterVolumeName)
+	d.Set("auxiliary_volume_name", vol.AuxVolumeName)
 	if vol.DeleteOnTermination != nil {
 		d.Set("delete_on_termination", vol.DeleteOnTermination)
 	}
 	d.Set("wwn", vol.Wwn)
 	d.Set(helpers.PICloudInstanceId, cloudInstanceID)
+	d.Set("io_throttle_rate", vol.IoThrottleRate)
 
 	return nil
 }
@@ -289,6 +361,26 @@ func resourceIBMPIVolumeUpdate(ctx context.Context, d *schema.ResourceData, meta
 	_, err = isWaitForIBMPIVolumeAvailable(ctx, client, *volrequest.VolumeID, d.Timeout(schema.TimeoutUpdate))
 	if err != nil {
 		return diag.FromErr(err)
+	}
+
+	if d.HasChanges(helpers.PIReplicationEnabled, helpers.PIVolumeType) {
+		var replicationEnabled bool
+		volActionBody := models.VolumeAction{}
+		if v, ok := d.GetOk(helpers.PIReplicationEnabled); ok {
+			replicationEnabled = v.(bool)
+			volActionBody.ReplicationEnabled = &replicationEnabled
+		}
+		if v, ok := d.GetOk(helpers.PIVolumeType); ok {
+			volActionBody.TargetStorageTier = flex.PtrToString(v.(string))
+		}
+		err = client.VolumeAction(volumeID, &volActionBody)
+		if err != nil {
+			return diag.FromErr(err)
+		}
+		_, err = isWaitForIBMPIVolumeAvailable(ctx, client, volumeID, d.Timeout(schema.TimeoutUpdate))
+		if err != nil {
+			return diag.FromErr(err)
+		}
 	}
 
 	return resourceIBMPIVolumeRead(ctx, d, meta)
@@ -364,7 +456,10 @@ func isIBMPIVolumeDeleteRefreshFunc(client *st.IBMPIVolumeClient, id string) res
 	return func() (interface{}, string, error) {
 		vol, err := client.Get(id)
 		if err != nil {
-			if strings.Contains(err.Error(), "Resource not found") {
+			uErr := errors.Unwrap(err)
+			switch uErr.(type) {
+			case *p_cloud_volumes.PcloudCloudinstancesVolumesGetNotFound:
+				log.Printf("[DEBUG] volume does not exist %v", err)
 				return vol, "deleted", nil
 			}
 			return nil, "", err

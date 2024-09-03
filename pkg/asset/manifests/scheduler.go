@@ -1,12 +1,13 @@
 package manifests
 
 import (
+	"context"
 	"path/filepath"
 
-	"github.com/ghodss/yaml"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/yaml"
 
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/installer/pkg/asset"
@@ -39,7 +40,7 @@ func (*Scheduler) Dependencies() []asset.Asset {
 }
 
 // Generate generates the scheduler config and its CRD.
-func (s *Scheduler) Generate(dependencies asset.Parents) error {
+func (s *Scheduler) Generate(_ context.Context, dependencies asset.Parents) error {
 	config := &configv1.Scheduler{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: configv1.SchemeGroupVersion.String(),

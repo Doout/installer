@@ -1,6 +1,7 @@
 package manifests
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 	hivev1agent "github.com/openshift/hive/apis/hive/v1/agent"
 	"github.com/openshift/installer/pkg/asset"
 	"github.com/openshift/installer/pkg/asset/agent"
+	"github.com/openshift/installer/pkg/asset/agent/workflow"
 	"github.com/openshift/installer/pkg/asset/mock"
 )
 
@@ -29,6 +31,7 @@ func TestClusterDeployment_Generate(t *testing.T) {
 		{
 			name: "missing config",
 			dependencies: []asset.Asset{
+				&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
 				&agent.OptionalInstallConfig{},
 			},
 			expectedError: "missing configuration or manifest file",
@@ -36,22 +39,23 @@ func TestClusterDeployment_Generate(t *testing.T) {
 		{
 			name: "valid configurations",
 			dependencies: []asset.Asset{
+				&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
 				getValidOptionalInstallConfig(),
 			},
 			expectedConfig: &hivev1.ClusterDeployment{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "ClusterDeployment",
-					APIVersion: "v1",
+					APIVersion: "hive.openshift.io/v1",
 				},
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      getClusterDeploymentName(getValidOptionalInstallConfig()),
-					Namespace: getObjectMetaNamespace(getValidOptionalInstallConfig()),
+					Namespace: getValidOptionalInstallConfig().ClusterNamespace(),
 				},
 				Spec: hivev1.ClusterDeploymentSpec{
 					ClusterName: getClusterDeploymentName(getValidOptionalInstallConfig()),
 					BaseDomain:  "testing.com",
 					PullSecretRef: &corev1.LocalObjectReference{
-						Name: getPullSecretName(getValidOptionalInstallConfig()),
+						Name: getPullSecretName(getValidOptionalInstallConfig().ClusterName()),
 					},
 					ClusterInstallRef: &hivev1.ClusterInstallLocalReference{
 						Group:   "extensions.hive.openshift.io",
@@ -70,7 +74,7 @@ func TestClusterDeployment_Generate(t *testing.T) {
 			parents.Add(tc.dependencies...)
 
 			asset := &ClusterDeployment{}
-			err := asset.Generate(parents)
+			err := asset.Generate(context.Background(), parents)
 
 			if tc.expectedError != "" {
 				assert.Equal(t, tc.expectedError, err.Error())

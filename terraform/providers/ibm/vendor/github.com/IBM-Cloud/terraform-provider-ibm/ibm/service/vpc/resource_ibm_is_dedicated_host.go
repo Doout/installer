@@ -13,6 +13,7 @@ import (
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/flex"
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/validate"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/customdiff"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 
@@ -35,6 +36,10 @@ const (
 	isDedicatedHostStatusPending        = "pending"
 	isDedicatedHostStatusRunning        = "running"
 	isDedicatedHostStatusFailed         = "failed"
+
+	isDedicatedHostAccessTags    = "access_tags"
+	isDedicatedHostUserTagType   = "user"
+	isDedicatedHostAccessTagType = "access"
 )
 
 func ResourceIbmIsDedicatedHost() *schema.Resource {
@@ -44,6 +49,18 @@ func ResourceIbmIsDedicatedHost() *schema.Resource {
 		UpdateContext: resourceIbmIsDedicatedHostUpdate,
 		DeleteContext: resourceIbmIsDedicatedHostDelete,
 		Importer:      &schema.ResourceImporter{},
+
+		CustomizeDiff: customdiff.All(
+			customdiff.Sequence(
+				func(_ context.Context, diff *schema.ResourceDiff, v interface{}) error {
+					return flex.ResourceTagsCustomizeDiff(diff)
+				},
+			),
+			customdiff.Sequence(
+				func(_ context.Context, diff *schema.ResourceDiff, v interface{}) error {
+					return flex.ResourceValidateAccessTags(diff, v)
+				}),
+		),
 
 		Schema: map[string]*schema.Schema{
 			"instance_placement_enabled": {
@@ -58,6 +75,39 @@ func ResourceIbmIsDedicatedHost() *schema.Resource {
 				Computed:     true,
 				ValidateFunc: validate.InvokeValidator("ibm_is_dedicated_host", "name"),
 				Description:  "The unique user-defined name for this dedicated host. If unspecified, the name will be a hyphenated list of randomly-selected words.",
+			},
+			"numa": {
+				Type:        schema.TypeList,
+				Computed:    true,
+				Description: "The dedicated host NUMA configuration",
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"count": {
+							Type:        schema.TypeInt,
+							Computed:    true,
+							Description: "The total number of NUMA nodes for this dedicated host",
+						},
+						"nodes": {
+							Type:        schema.TypeList,
+							Computed:    true,
+							Description: "The NUMA nodes for this dedicated host.",
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									"available_vcpu": {
+										Type:        schema.TypeInt,
+										Computed:    true,
+										Description: "The available VCPU for this NUMA node.",
+									},
+									"vcpu": {
+										Type:        schema.TypeInt,
+										Computed:    true,
+										Description: "The total VCPU capacity for this NUMA node.",
+									},
+								},
+							},
+						},
+					},
+				},
 			},
 			"profile": {
 				Type:        schema.TypeString,
@@ -341,6 +391,14 @@ func ResourceIbmIsDedicatedHost() *schema.Resource {
 				Computed:    true,
 				Description: "The globally unique name of the zone this dedicated host resides in.",
 			},
+			isDedicatedHostAccessTags: {
+				Type:        schema.TypeSet,
+				Optional:    true,
+				Computed:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString, ValidateFunc: validate.InvokeValidator("ibm_is_dedicated_host", "accesstag")},
+				Set:         flex.ResourceIBMVPCHash,
+				Description: "List of access management tags",
+			},
 		},
 	}
 }
@@ -357,6 +415,15 @@ func ResourceIbmIsDedicatedHostValidator() *validate.ResourceValidator {
 			MinValueLength:             1,
 			MaxValueLength:             63,
 		})
+	validateSchema = append(validateSchema,
+		validate.ValidateSchema{
+			Identifier:                 "accesstag",
+			ValidateFunctionIdentifier: validate.ValidateRegexpLen,
+			Type:                       validate.TypeString,
+			Optional:                   true,
+			Regexp:                     `^([A-Za-z0-9_.-]|[A-Za-z0-9_.-][A-Za-z0-9_ .-]*[A-Za-z0-9_.-]):([A-Za-z0-9_.-]|[A-Za-z0-9_.-][A-Za-z0-9_ .-]*[A-Za-z0-9_.-])$`,
+			MinValueLength:             1,
+			MaxValueLength:             128})
 
 	resourceValidator := validate.ResourceValidator{ResourceName: "ibm_is_dedicated_host", Schema: validateSchema}
 	return &resourceValidator
@@ -413,7 +480,14 @@ func resourceIbmIsDedicatedHostCreate(context context.Context, d *schema.Resourc
 	}
 
 	d.SetId(*dedicatedHost.ID)
-
+	if _, ok := d.GetOk(isDedicatedHostAccessTags); ok {
+		oldList, newList := d.GetChange(isDedicatedHostAccessTags)
+		err = flex.UpdateGlobalTagsUsingCRN(oldList, newList, meta, *dedicatedHost.CRN, "", isDedicatedHostAccessTagType)
+		if err != nil {
+			log.Printf(
+				"Error on create of resource dedicated host (%s) access tags: %s", d.Id(), err)
+		}
+	}
 	_, err = isWaitForDedicatedHostAvailable(vpcClient, d.Id(), d.Timeout(schema.TimeoutCreate), d)
 	if err != nil {
 		return diag.FromErr(err)
@@ -488,6 +562,11 @@ func resourceIbmIsDedicatedHostRead(context context.Context, d *schema.ResourceD
 	if err = d.Set("name", dedicatedHost.Name); err != nil {
 		return diag.FromErr(fmt.Errorf("[ERROR] Error setting name: %s", err))
 	}
+	if dedicatedHost.Numa != nil {
+		if err = d.Set("numa", dataSourceDedicatedHostFlattenNumaNodes(*dedicatedHost.Numa)); err != nil {
+			return diag.FromErr(fmt.Errorf("[ERROR] Error setting numa: %s", err))
+		}
+	}
 
 	if err = d.Set("profile", *dedicatedHost.Profile.Name); err != nil {
 		return diag.FromErr(fmt.Errorf("[ERROR] Error setting profile: %s", err))
@@ -523,7 +602,12 @@ func resourceIbmIsDedicatedHostRead(context context.Context, d *schema.ResourceD
 	if err = d.Set("zone", *dedicatedHost.Zone.Name); err != nil {
 		return diag.FromErr(fmt.Errorf("[ERROR] Error setting zone: %s", err))
 	}
-
+	accesstags, err := flex.GetGlobalTagsUsingCRN(meta, *dedicatedHost.CRN, "", isDedicatedHostAccessTagType)
+	if err != nil {
+		log.Printf(
+			"Error on get of resource dedicated host (%s) access tags: %s", d.Id(), err)
+	}
+	d.Set(isDedicatedHostAccessTags, accesstags)
 	return nil
 }
 
@@ -613,7 +697,14 @@ func resourceIbmIsDedicatedHostUpdate(context context.Context, d *schema.Resourc
 			return diag.FromErr(err)
 		}
 	}
-
+	if d.HasChange(isDedicatedHostAccessTags) {
+		oldList, newList := d.GetChange(isDedicatedHostAccessTags)
+		err := flex.UpdateGlobalTagsUsingCRN(oldList, newList, meta, d.Get("crn").(string), "", isDedicatedHostAccessTagType)
+		if err != nil {
+			log.Printf(
+				"Error on update of resource dedicated host (%s) access tags: %s", d.Id(), err)
+		}
+	}
 	return resourceIbmIsDedicatedHostRead(context, d, meta)
 }
 

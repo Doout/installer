@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"path/filepath"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -34,12 +33,16 @@ const (
 )
 
 // NewClusterOpenShiftAPIClient Create a kube client with OCP understanding
-func NewClusterOpenShiftAPIClient(ctx context.Context, assetDir string) (*ClusterOpenShiftAPIClient, error) {
-
+func NewClusterOpenShiftAPIClient(ctx context.Context, kubeconfigPath string) (*ClusterOpenShiftAPIClient, error) {
 	ocpClient := &ClusterOpenShiftAPIClient{}
 
-	kubeconfigpath := filepath.Join(assetDir, "auth", "kubeconfig")
-	kubeconfig, err := clientcmd.BuildConfigFromFlags("", kubeconfigpath)
+	var kubeconfig *rest.Config
+	var err error
+	if kubeconfigPath != "" {
+		kubeconfig, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	} else {
+		kubeconfig, err = rest.InClusterConfig()
+	}
 	if err != nil {
 		return nil, errors.Wrap(err, "creating kubeconfig for ocp config client")
 	}
@@ -58,10 +61,9 @@ func NewClusterOpenShiftAPIClient(ctx context.Context, assetDir string) (*Cluste
 	ocpClient.RouteClient = routeClient
 	ocpClient.ctx = ctx
 	ocpClient.config = kubeconfig
-	ocpClient.configPath = kubeconfigpath
+	ocpClient.configPath = kubeconfigPath
 
 	return ocpClient, nil
-
 }
 
 // AreClusterOperatorsInitialized Waits for all Openshift cluster operators to initialize
@@ -107,7 +109,6 @@ func (ocp *ClusterOpenShiftAPIClient) IsConsoleRouteAvailable() (bool, error) {
 		}
 	}
 	return false, errors.Wrap(err, "Waiting for openshift-console route")
-
 }
 
 // IsConsoleRouteURLAvailable Check if the console route URL is available

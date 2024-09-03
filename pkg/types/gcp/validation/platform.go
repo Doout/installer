@@ -1,14 +1,14 @@
 package validation
 
 import (
-	"os"
+	"fmt"
+	"regexp"
 	"sort"
 
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	"github.com/openshift/installer/pkg/types"
 	"github.com/openshift/installer/pkg/types/gcp"
-	"github.com/openshift/installer/pkg/validate"
 )
 
 var (
@@ -17,6 +17,7 @@ var (
 	// name of the region.
 	Regions = map[string]string{
 		// List from: https://cloud.google.com/compute/docs/regions-zones/
+		"africa-south1":           "Johannesburg, South Africa",
 		"asia-east1":              "Changhua County, Taiwan",
 		"asia-east2":              "Hong Kong",
 		"asia-northeast1":         "Tokyo, Japan",
@@ -37,7 +38,10 @@ var (
 		"europe-west6":            "Zürich, Switzerland",
 		"europe-west8":            "Milan, Italy",
 		"europe-west9":            "Paris, France",
+		"europe-west12":           "Turin, Italy",
 		"europe-southwest1":       "Madrid, Spain",
+		"me-central1":             "Doha, Qatar, Middle East",
+		"me-central2":             "Dammam, Saudi Arabia, Middle East",
 		"me-west1":                "Tel Aviv, Israel",
 		"northamerica-northeast1": "Montréal, Québec, Canada",
 		"northamerica-northeast2": "Toronto, Ontario, Canada",
@@ -63,6 +67,21 @@ var (
 		sort.Strings(validValues)
 		return validValues
 	}()
+
+	// userLabelKeyRegex is for verifying that the label key contains only allowed characters.
+	userLabelKeyRegex = regexp.MustCompile(`^[a-z][0-9a-z_-]{0,62}$`)
+
+	// userLabelValueRegex is for verifying that the label value contains only allowed characters.
+	userLabelValueRegex = regexp.MustCompile(`^[0-9a-z_-]{1,63}$`)
+
+	// userLabelKeyPrefixRegex is for verifying that the label key does not contain restricted prefixes.
+	userLabelKeyPrefixRegex = regexp.MustCompile(`^(?i)(kubernetes\-io|openshift\-io)`)
+)
+
+const (
+	// maxUserLabelLimit is the maximum userLabels that can be configured as defined in openshift/api.
+	// https://github.com/openshift/api/commit/ae73a19d05c35068af16c9aeff375d0b7c936a8a#diff-07b264a49084976b670fb699badaca1795027d6ea732a99226a5388104f6174fR592-R602
+	maxUserLabelLimit = 32
 )
 
 // ValidatePlatform checks that the specified platform is valid.
@@ -97,15 +116,48 @@ func ValidatePlatform(p *gcp.Platform, fldPath *field.Path, ic *types.InstallCon
 		allErrs = append(allErrs, field.Required(fldPath.Child("network"), "must provide a VPC network when supplying subnets"))
 	}
 
-	if oi, ok := os.LookupEnv("OPENSHIFT_INSTALL_OS_IMAGE_OVERRIDE"); ok && oi != "" && len(p.Licenses) > 0 {
-		allErrs = append(allErrs, field.Forbidden(fldPath.Child("licenses"), "the use of custom image licenses is forbidden if an OPENSHIFT_INSTALL_OS_IMAGE_OVERRIDE is specified"))
-	}
-
-	for i, license := range p.Licenses {
-		if validate.URIWithProtocol(license, "https") != nil {
-			allErrs = append(allErrs, field.Invalid(fldPath.Child("licenses").Index(i), license, "licenses must be URLs (https) only"))
-		}
-	}
+	// check if configured userLabels are valid.
+	allErrs = append(allErrs, validateUserLabels(p.UserLabels, fldPath.Child("userLabels"))...)
 
 	return allErrs
+}
+
+// validateUserLabels verifies if configured number of UserLabels is not more than
+// allowed limit and the label keys and values are valid.
+func validateUserLabels(labels []gcp.UserLabel, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+	if len(labels) == 0 {
+		return allErrs
+	}
+
+	if len(labels) > maxUserLabelLimit {
+		allErrs = append(allErrs, field.TooMany(fldPath, len(labels), maxUserLabelLimit))
+	}
+
+	for _, label := range labels {
+		if err := validateLabel(label.Key, label.Value); err != nil {
+			allErrs = append(allErrs, field.Invalid(fldPath.Key(label.Key), label.Value, err.Error()))
+		}
+	}
+	return allErrs
+}
+
+// validateLabel checks the following to ensure that the label configured is acceptable.
+//   - The key and value contain only allowed characters.
+//   - The key is not empty and at most 63 characters and starts with a lowercase letter.
+//   - The value is not empty and at most 63 characters.
+//   - The key and value must contain only lowercase letters, numeric characters,
+//     underscores, and dashes.
+//   - The key cannot be Name or have kubernetes.io, openshift.io prefixes.
+func validateLabel(key, value string) error {
+	if !userLabelKeyRegex.MatchString(key) {
+		return fmt.Errorf("label key is invalid or contains invalid characters. Label key can have a maximum of 63 characters and cannot be empty. Label key must begin with a lowercase letter, and must contain only lowercase letters, numeric characters, and the following special characters `_-`")
+	}
+	if !userLabelValueRegex.MatchString(value) {
+		return fmt.Errorf("label value is invalid or contains invalid characters. Label value can have a maximum of 63 characters and cannot be empty. Value must contain only lowercase letters, numeric characters, and the following special characters `_-`")
+	}
+	if userLabelKeyPrefixRegex.MatchString(key) {
+		return fmt.Errorf("label key contains restricted prefix. Label key cannot have `kubernetes-io`, `openshift-io` prefixes")
+	}
+	return nil
 }

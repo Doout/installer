@@ -1,6 +1,7 @@
 package asset
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -23,7 +25,7 @@ type Asset interface {
 	Dependencies() []Asset
 
 	// Generate generates this asset given the states of its parent assets.
-	Generate(Parents) error
+	Generate(context.Context, Parents) error
 
 	// Name returns the human-friendly name of the asset.
 	Name() string
@@ -42,6 +44,16 @@ type WritableAsset interface {
 	Load(FileFetcher) (found bool, err error)
 }
 
+// WritableRuntimeAsset is a WriteableAsset that has files that can be written to disk,
+// in addition to a manifest file that contains the runtime object.
+type WritableRuntimeAsset interface {
+	WritableAsset
+
+	// RuntimeFiles returns the manifest files along with their
+	// instantiated runtime object.
+	RuntimeFiles() []*RuntimeFile
+}
+
 // File is a file for an Asset.
 type File struct {
 	// Filename is the name of the file.
@@ -50,10 +62,20 @@ type File struct {
 	Data []byte
 }
 
+// RuntimeFile is a file that contains a manifest file and a runtime object.
+type RuntimeFile struct {
+	File
+
+	Object client.Object `json:"-"`
+}
+
 // PersistToFile writes all of the files of the specified asset into the specified
 // directory.
 func PersistToFile(asset WritableAsset, directory string) error {
 	for _, f := range asset.Files() {
+		if f == nil {
+			panic("asset.Files() returned nil")
+		}
 		path := filepath.Join(directory, f.Filename)
 		if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 			return errors.Wrap(err, "failed to create dir")
@@ -105,5 +127,10 @@ func isDirEmpty(name string) (bool, error) {
 
 // SortFiles sorts the specified files by file name.
 func SortFiles(files []*File) {
+	sort.Slice(files, func(i, j int) bool { return files[i].Filename < files[j].Filename })
+}
+
+// SortManifestFiles sorts the specified files by file name.
+func SortManifestFiles(files []*RuntimeFile) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Filename < files[j].Filename })
 }

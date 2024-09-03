@@ -20,26 +20,29 @@ import (
 )
 
 const (
-	isVirtualEndpointGatewayName               = "name"
-	isVirtualEndpointGatewayResourceType       = "resource_type"
-	isVirtualEndpointGatewayCRN                = "crn"
-	isVirtualEndpointGatewayResourceGroupID    = "resource_group"
-	isVirtualEndpointGatewayCreatedAt          = "created_at"
-	isVirtualEndpointGatewayIPs                = "ips"
-	isVirtualEndpointGatewayIPsID              = "id"
-	isVirtualEndpointGatewayIPsAddress         = "address"
-	isVirtualEndpointGatewayIPsName            = "name"
-	isVirtualEndpointGatewayIPsSubnet          = "subnet"
-	isVirtualEndpointGatewayIPsResourceType    = "resource_type"
-	isVirtualEndpointGatewayHealthState        = "health_state"
-	isVirtualEndpointGatewayLifecycleState     = "lifecycle_state"
-	isVirtualEndpointGatewayTarget             = "target"
-	isVirtualEndpointGatewayTargetName         = "name"
-	isVirtualEndpointGatewayTargetCRN          = "crn"
-	isVirtualEndpointGatewayTargetResourceType = "resource_type"
-	isVirtualEndpointGatewayVpcID              = "vpc"
-	isVirtualEndpointGatewayTags               = "tags"
-	isVirtualEndpointGatewaySecurityGroups     = "security_groups"
+	isVirtualEndpointGatewayName                      = "name"
+	isVirtualEndpointGatewayResourceType              = "resource_type"
+	isVirtualEndpointGatewayCRN                       = "crn"
+	isVirtualEndpointGatewayResourceGroupID           = "resource_group"
+	isVirtualEndpointGatewayCreatedAt                 = "created_at"
+	isVirtualEndpointGatewayIPs                       = "ips"
+	isVirtualEndpointGatewayIPsID                     = "id"
+	isVirtualEndpointGatewayIPsAddress                = "address"
+	isVirtualEndpointGatewayIPsName                   = "name"
+	isVirtualEndpointGatewayIPsSubnet                 = "subnet"
+	isVirtualEndpointGatewayIPsResourceType           = "resource_type"
+	isVirtualEndpointGatewayHealthState               = "health_state"
+	isVirtualEndpointGatewayLifecycleState            = "lifecycle_state"
+	isVirtualEndpointGatewayTarget                    = "target"
+	isVirtualEndpointGatewayTargetName                = "name"
+	isVirtualEndpointGatewayTargetCRN                 = "crn"
+	isVirtualEndpointGatewayTargetResourceType        = "resource_type"
+	isVirtualEndpointGatewayVpcID                     = "vpc"
+	isVirtualEndpointGatewayTags                      = "tags"
+	isVirtualEndpointGatewaySecurityGroups            = "security_groups"
+	isVirtualEndpointGatewayServiceEndpoints          = "service_endpoints"
+	isVirtualEndpointGatewayAccessTags                = "access_tags"
+	isVirtualEndpointGatewayAllowDnsResolutionBinding = "allow_dns_resolution_binding"
 )
 
 func ResourceIBMISEndpointGateway() *schema.Resource {
@@ -53,10 +56,16 @@ func ResourceIBMISEndpointGateway() *schema.Resource {
 		Exists:   resourceIBMisVirtualEndpointGatewayExists,
 		Importer: &schema.ResourceImporter{},
 
-		CustomizeDiff: customdiff.Sequence(
-			func(_ context.Context, diff *schema.ResourceDiff, v interface{}) error {
-				return flex.ResourceTagsCustomizeDiff(diff)
-			},
+		CustomizeDiff: customdiff.All(
+			customdiff.Sequence(
+				func(_ context.Context, diff *schema.ResourceDiff, v interface{}) error {
+					return flex.ResourceTagsCustomizeDiff(diff)
+				},
+			),
+			customdiff.Sequence(
+				func(_ context.Context, diff *schema.ResourceDiff, v interface{}) error {
+					return flex.ResourceValidateAccessTags(diff, v)
+				}),
 		),
 
 		Timeouts: &schema.ResourceTimeout{
@@ -94,6 +103,14 @@ func ResourceIBMISEndpointGateway() *schema.Resource {
 				Type:        schema.TypeString,
 				Computed:    true,
 				Description: "Endpoint gateway created date and time",
+			},
+			isVirtualEndpointGatewayServiceEndpoints: {
+				Type:     schema.TypeList,
+				Computed: true,
+				Elem: &schema.Schema{
+					Type: schema.TypeString,
+				},
+				Description: "The fully qualified domain names for the target service. A fully qualified domain name for the target service",
 			},
 			isVirtualEndpointGatewayHealthState: {
 				Type:        schema.TypeString,
@@ -194,6 +211,12 @@ func ResourceIBMISEndpointGateway() *schema.Resource {
 				ForceNew:    true,
 				Description: "The VPC id",
 			},
+			isVirtualEndpointGatewayAllowDnsResolutionBinding: {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Computed:    true,
+				Description: "Indicates whether to allow this endpoint gateway to participate in DNS resolution bindings with a VPC that has dns.enable_hub set to true.",
+			},
 			isVirtualEndpointGatewayTags: {
 				Type:        schema.TypeSet,
 				Optional:    true,
@@ -201,6 +224,14 @@ func ResourceIBMISEndpointGateway() *schema.Resource {
 				Elem:        &schema.Schema{Type: schema.TypeString, ValidateFunc: validate.InvokeValidator("ibm_is_virtual_endpoint_gateway", "tags")},
 				Set:         flex.ResourceIBMVPCHash,
 				Description: "List of tags for VPE",
+			},
+			isVirtualEndpointGatewayAccessTags: {
+				Type:        schema.TypeSet,
+				Optional:    true,
+				Computed:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString, ValidateFunc: validate.InvokeValidator("ibm_is_virtual_endpoint_gateway", "accesstag")},
+				Set:         flex.ResourceIBMVPCHash,
+				Description: "List of access management tags",
 			},
 		},
 	}
@@ -233,6 +264,16 @@ func ResourceIBMISEndpointGatewayValidator() *validate.ResourceValidator {
 			Type:                       validate.TypeString,
 			Required:                   true,
 			AllowedValues:              "provider_cloud_service, provider_infrastructure_service"})
+
+	validateSchema = append(validateSchema,
+		validate.ValidateSchema{
+			Identifier:                 "accesstag",
+			ValidateFunctionIdentifier: validate.ValidateRegexpLen,
+			Type:                       validate.TypeString,
+			Optional:                   true,
+			Regexp:                     `^([A-Za-z0-9_.-]|[A-Za-z0-9_.-][A-Za-z0-9_ .-]*[A-Za-z0-9_.-]):([A-Za-z0-9_.-]|[A-Za-z0-9_.-][A-Za-z0-9_ .-]*[A-Za-z0-9_.-])$`,
+			MinValueLength:             1,
+			MaxValueLength:             128})
 
 	ibmEndpointGatewayResourceValidator := validate.ResourceValidator{ResourceName: "ibm_is_virtual_endpoint_gateway", Schema: validateSchema}
 	return &ibmEndpointGatewayResourceValidator
@@ -300,22 +341,42 @@ func resourceIBMisVirtualEndpointGatewayCreate(d *schema.ResourceData, meta inte
 		opt.SetResourceGroup(resourceGroupOpt)
 
 	}
-	result, response, err := sess.CreateEndpointGateway(opt)
+	// dns resolution binding change
+	if allowDnsResolutionBindingOk, ok := d.GetOkExists(isVirtualEndpointGatewayAllowDnsResolutionBinding); ok {
+		allowDnsResolutionBinding := allowDnsResolutionBindingOk.(bool)
+		opt.AllowDnsResolutionBinding = &allowDnsResolutionBinding
+	}
+	endpointGateway, response, err := sess.CreateEndpointGateway(opt)
 	if err != nil {
 		log.Printf("Create Endpoint Gateway failed: %v", response)
-		return fmt.Errorf("Create Endpoint Gateway failed %s\n%s", err, response)
+		return fmt.Errorf("[ERROR] Create Endpoint Gateway failed %s\n%s", err, response)
 	}
 
-	d.SetId(*result.ID)
+	d.SetId(*endpointGateway.ID)
+
+	_, err = isWaitForVirtualEndpointGatewayAvailable(sess, d.Id(), d.Timeout(schema.TimeoutCreate))
+	if err != nil {
+		return err
+	}
 	v := os.Getenv("IC_ENV_TAGS")
 	if _, ok := d.GetOk(isVirtualEndpointGatewayTags); ok || v != "" {
 		oldList, newList := d.GetChange(isVirtualEndpointGatewayTags)
-		err = flex.UpdateTagsUsingCRN(oldList, newList, meta, *result.CRN)
+		err = flex.UpdateGlobalTagsUsingCRN(oldList, newList, meta, *endpointGateway.CRN, "", isUserTagType)
 		if err != nil {
 			log.Printf(
 				"Error on create of VPE (%s) tags: %s", d.Id(), err)
 		}
 	}
+
+	if _, ok := d.GetOk(isVirtualEndpointGatewayAccessTags); ok {
+		oldList, newList := d.GetChange(isVirtualEndpointGatewayAccessTags)
+		err = flex.UpdateGlobalTagsUsingCRN(oldList, newList, meta, *endpointGateway.CRN, "", isAccessTagType)
+		if err != nil {
+			log.Printf(
+				"Error on create of VPE (%s) access tags: %s", d.Id(), err)
+		}
+	}
+
 	return resourceIBMisVirtualEndpointGatewayRead(d, meta)
 }
 
@@ -324,21 +385,22 @@ func resourceIBMisVirtualEndpointGatewayUpdate(d *schema.ResourceData, meta inte
 	if err != nil {
 		return err
 	}
-
+	// create option
+	endpointGatewayPatchModel := new(vpcv1.EndpointGatewayPatch)
 	if d.HasChange(isVirtualEndpointGatewayName) {
 		name := d.Get(isVirtualEndpointGatewayName).(string)
-
-		// create option
-		endpointGatewayPatchModel := new(vpcv1.EndpointGatewayPatch)
 		endpointGatewayPatchModel.Name = core.StringPtr(name)
-		endpointGatewayPatchModelAsPatch, _ := endpointGatewayPatchModel.AsPatch()
-		opt := sess.NewUpdateEndpointGatewayOptions(d.Id(), endpointGatewayPatchModelAsPatch)
-		_, response, err := sess.UpdateEndpointGateway(opt)
-		if err != nil {
-			log.Printf("Update Endpoint Gateway failed: %v", response)
-			return fmt.Errorf("Update Endpoint Gateway failed : %s\n%s", err, response)
-		}
-
+	}
+	if d.HasChange(isVirtualEndpointGatewayAllowDnsResolutionBinding) {
+		allowDnsResolutionBinding := d.Get(isVirtualEndpointGatewayAllowDnsResolutionBinding).(bool)
+		endpointGatewayPatchModel.AllowDnsResolutionBinding = &allowDnsResolutionBinding
+	}
+	endpointGatewayPatchModelAsPatch, _ := endpointGatewayPatchModel.AsPatch()
+	opt := sess.NewUpdateEndpointGatewayOptions(d.Id(), endpointGatewayPatchModelAsPatch)
+	_, response, err := sess.UpdateEndpointGateway(opt)
+	if err != nil {
+		log.Printf("Update Endpoint Gateway failed: %v", response)
+		return fmt.Errorf("Update Endpoint Gateway failed : %s\n%s", err, response)
 	}
 	id := d.Id()
 	var remove, add []string
@@ -389,17 +451,28 @@ func resourceIBMisVirtualEndpointGatewayUpdate(d *schema.ResourceData, meta inte
 		}
 
 	}
-	if d.HasChange(isVirtualEndpointGatewayTags) {
+	if d.HasChange(isVirtualEndpointGatewayTags) || d.HasChange(isVirtualEndpointGatewayAccessTags) {
 		opt := sess.NewGetEndpointGatewayOptions(d.Id())
-		result, response, err := sess.GetEndpointGateway(opt)
+		endpointGateway, response, err := sess.GetEndpointGateway(opt)
 		if err != nil {
 			return fmt.Errorf("[ERROR] Error getting VPE: %s\n%s", err, response)
 		}
-		oldList, newList := d.GetChange(isVirtualEndpointGatewayTags)
-		err = flex.UpdateTagsUsingCRN(oldList, newList, meta, *result.CRN)
-		if err != nil {
-			log.Printf(
-				"Error on update of VPE (%s) tags: %s", d.Id(), err)
+		if d.HasChange(isVirtualEndpointGatewayTags) {
+			oldList, newList := d.GetChange(isVirtualEndpointGatewayTags)
+			err := flex.UpdateGlobalTagsUsingCRN(oldList, newList, meta, *endpointGateway.CRN, "", isUserTagType)
+			if err != nil {
+				log.Printf(
+					"Error on update of VPE (%s) tags: %s", d.Id(), err)
+			}
+		}
+
+		if d.HasChange(isVirtualEndpointGatewayAccessTags) {
+			oldList, newList := d.GetChange(isVirtualEndpointGatewayAccessTags)
+			err := flex.UpdateGlobalTagsUsingCRN(oldList, newList, meta, *endpointGateway.CRN, "", isAccessTagType)
+			if err != nil {
+				log.Printf(
+					"Error on update of VPE (%s) access tags: %s", d.Id(), err)
+			}
 		}
 	}
 	return resourceIBMisVirtualEndpointGatewayRead(d, meta)
@@ -412,35 +485,47 @@ func resourceIBMisVirtualEndpointGatewayRead(d *schema.ResourceData, meta interf
 	}
 	// read option
 	opt := sess.NewGetEndpointGatewayOptions(d.Id())
-	result, response, err := sess.GetEndpointGateway(opt)
+	endpointGateway, response, err := sess.GetEndpointGateway(opt)
 	if err != nil {
 		if response != nil && response.StatusCode == 404 {
 			d.SetId("")
 			return nil
 		}
 		log.Printf("Get Endpoint Gateway failed: %v", response)
-		return fmt.Errorf("Get Endpoint Gateway failed %s\n%s", err, response)
+		return fmt.Errorf("[ERROR] Get Endpoint Gateway failed %s\n%s", err, response)
 	}
-	d.Set(isVirtualEndpointGatewayName, result.Name)
-	d.Set(isVirtualEndpointGatewayHealthState, result.HealthState)
-	d.Set(isVirtualEndpointGatewayCreatedAt, result.CreatedAt.String())
-	d.Set(isVirtualEndpointGatewayLifecycleState, result.LifecycleState)
-	d.Set(isVirtualEndpointGatewayResourceType, result.ResourceType)
-	d.Set(isVirtualEndpointGatewayCRN, result.CRN)
-	d.Set(isVirtualEndpointGatewayIPs, flattenIPs(result.Ips))
-	d.Set(isVirtualEndpointGatewayResourceGroupID, result.ResourceGroup.ID)
+	d.Set(isVirtualEndpointGatewayName, endpointGateway.Name)
+	d.Set(isVirtualEndpointGatewayHealthState, endpointGateway.HealthState)
+	d.Set(isVirtualEndpointGatewayCreatedAt, endpointGateway.CreatedAt.String())
+	d.Set(isVirtualEndpointGatewayLifecycleState, endpointGateway.LifecycleState)
+	d.Set(isVirtualEndpointGatewayAllowDnsResolutionBinding, endpointGateway.AllowDnsResolutionBinding)
+	d.Set(isVirtualEndpointGatewayResourceType, endpointGateway.ResourceType)
+	d.Set(isVirtualEndpointGatewayCRN, endpointGateway.CRN)
+	d.Set(isVirtualEndpointGatewayIPs, flattenIPs(endpointGateway.Ips))
+	d.Set(isVirtualEndpointGatewayResourceGroupID, endpointGateway.ResourceGroup.ID)
 	d.Set(isVirtualEndpointGatewayTarget,
-		flattenEndpointGatewayTarget(result.Target.(*vpcv1.EndpointGatewayTarget)))
-	d.Set(isVirtualEndpointGatewayVpcID, result.VPC.ID)
-	if result.SecurityGroups != nil {
-		d.Set(isVirtualEndpointGatewaySecurityGroups, flattenDataSourceSecurityGroups(result.SecurityGroups))
+		flattenEndpointGatewayTarget(endpointGateway.Target.(*vpcv1.EndpointGatewayTarget)))
+	if len(endpointGateway.ServiceEndpoints) > 0 {
+		d.Set(isVirtualEndpointGatewayServiceEndpoints, endpointGateway.ServiceEndpoints)
 	}
-	tags, err := flex.GetTagsUsingCRN(meta, *result.CRN)
+	d.Set(isVirtualEndpointGatewayVpcID, endpointGateway.VPC.ID)
+	if endpointGateway.SecurityGroups != nil {
+		d.Set(isVirtualEndpointGatewaySecurityGroups, flattenDataSourceSecurityGroups(endpointGateway.SecurityGroups))
+	}
+	tags, err := flex.GetGlobalTagsUsingCRN(meta, *endpointGateway.CRN, "", isUserTagType)
 	if err != nil {
 		log.Printf(
 			"Error on get of VPE (%s) tags: %s", d.Id(), err)
 	}
 	d.Set(isVirtualEndpointGatewayTags, tags)
+
+	accesstags, err := flex.GetGlobalTagsUsingCRN(meta, *endpointGateway.CRN, "", isAccessTagType)
+	if err != nil {
+		log.Printf(
+			"Error on get of VPE (%s) access tags: %s", d.Id(), err)
+	}
+	d.Set(isVirtualEndpointGatewayAccessTags, accesstags)
+
 	return nil
 }
 

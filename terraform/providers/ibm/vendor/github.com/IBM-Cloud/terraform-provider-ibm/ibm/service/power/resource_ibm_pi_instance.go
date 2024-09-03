@@ -101,13 +101,13 @@ func ResourceIBMPIInstance() *schema.Resource {
 				Type:        schema.TypeString,
 				Optional:    true,
 				Computed:    true,
-				Description: "Storage type for server deployment",
+				Description: "Storage type for server deployment; if pi_storage_type is not provided the storage type will default to tier3",
 			},
 			PIInstanceStoragePool: {
 				Type:        schema.TypeString,
 				Optional:    true,
 				Computed:    true,
-				Description: "Storage Pool for server deployment; if provided then pi_affinity_policy and pi_storage_type will be ignored",
+				Description: "Storage Pool for server deployment; if provided then pi_storage_pool_affinity will be ignored; Only valid when you deploy one of the IBM supplied stock images. Storage pool for a custom image (an imported image or an image that is created from a VM capture) defaults to the storage pool the image was created in",
 			},
 			PIAffinityPolicy: {
 				Type:         schema.TypeString,
@@ -192,6 +192,18 @@ func ResourceIBMPIInstance() *schema.Resource {
 				Type:        schema.TypeString,
 				Optional:    true,
 				Description: "Placement group ID",
+			},
+			Arg_PIInstanceSharedProcessorPool: {
+				Type:          schema.TypeString,
+				Optional:      true,
+				ForceNew:      true,
+				ConflictsWith: []string{PISAPInstanceProfileID},
+				Description:   "Shared Processor Pool the instance is deployed on",
+			},
+			Attr_PIInstanceSharedProcessorPoolID: {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Shared Processor Pool ID the instance is deployed on",
 			},
 			"health_status": {
 				Type:        schema.TypeString,
@@ -440,6 +452,8 @@ func resourceIBMPIInstanceRead(ctx context.Context, d *schema.ResourceData, meta
 	if *powervmdata.PlacementGroup != "none" {
 		d.Set(helpers.PIPlacementGroupID, powervmdata.PlacementGroup)
 	}
+	d.Set(Arg_PIInstanceSharedProcessorPool, powervmdata.SharedProcessorPool)
+	d.Set(Attr_PIInstanceSharedProcessorPoolID, powervmdata.SharedProcessorPoolID)
 
 	networksMap := []map[string]interface{}{}
 	if powervmdata.Networks != nil {
@@ -599,15 +613,16 @@ func resourceIBMPIInstanceUpdate(ctx context.Context, d *schema.ResourceData, me
 
 		//if d.GetOkExists("reboot_for_resource_change")
 
-		if mem > maxMemLpar || procs > maxCPULpar {
+		instanceState := d.Get("status")
+		log.Printf("the instance state is %s", instanceState)
 
+		if (mem > maxMemLpar || procs > maxCPULpar) && instanceState != "SHUTOFF" {
 			err = performChangeAndReboot(ctx, client, instanceID, cloudInstanceID, mem, procs)
 			if err != nil {
 				return diag.FromErr(err)
 			}
 
 		} else {
-
 			body := &models.PVMInstanceUpdate{
 				Memory:     mem,
 				Processors: procs,
@@ -627,9 +642,16 @@ func resourceIBMPIInstanceUpdate(ctx context.Context, d *schema.ResourceData, me
 			if err != nil {
 				return diag.Errorf("failed to update the lpar with the change %v", err)
 			}
-			_, err = isWaitForPIInstanceAvailable(ctx, client, instanceID, "OK")
-			if err != nil {
-				return diag.FromErr(err)
+			if instanceState == "SHUTOFF" {
+				_, err = isWaitforPIInstanceUpdate(ctx, client, instanceID)
+				if err != nil {
+					return diag.FromErr(err)
+				}
+			} else {
+				_, err = isWaitForPIInstanceAvailable(ctx, client, instanceID, "OK")
+				if err != nil {
+					return diag.FromErr(err)
+				}
 			}
 		}
 	}
@@ -834,12 +856,13 @@ func isPIInstanceRefreshFunc(client *st.IBMPIInstanceClient, id, instanceReadySt
 	}
 }
 
-func checkBase64(input string) error {
-	_, err := base64.StdEncoding.DecodeString(input)
+// This function takes the input string and encodes into base64 if isn't already encoded
+func encodeBase64(userData string) string {
+	_, err := base64.StdEncoding.DecodeString(userData)
 	if err != nil {
-		return fmt.Errorf("failed to check if input is base64 %s", err)
+		return base64.StdEncoding.EncodeToString([]byte(userData))
 	}
-	return err
+	return userData
 }
 
 func isWaitForPIInstanceStopped(ctx context.Context, client *st.IBMPIInstanceClient, id string) (interface{}, error) {
@@ -948,7 +971,7 @@ func performChangeAndReboot(ctx context.Context, client *st.IBMPIInstanceClient,
 }
 
 func isWaitforPIInstanceUpdate(ctx context.Context, client *st.IBMPIInstanceClient, id string) (interface{}, error) {
-	log.Printf("Waiting for PIInstance (%s) to be SHUTOFF AFTER THE RESIZE Due to DLPAR Operation ", id)
+	log.Printf("Waiting for PIInstance (%s) to be ACTIVE or SHUTOFF AFTER THE RESIZE Due to DLPAR Operation ", id)
 
 	stateConf := &resource.StateChangeConf{
 		Pending:    []string{"RESIZE", "VERIFY_RESIZE"},
@@ -1002,6 +1025,7 @@ func checkCloudInstanceCapability(cloudInstance *models.CloudInstance, custom_ca
 	}
 	return false
 }
+
 func createSAPInstance(d *schema.ResourceData, sapClient *st.IBMPISAPInstanceClient) (*models.PVMInstanceList, error) {
 
 	name := d.Get(helpers.PIInstanceName).(string)
@@ -1058,12 +1082,7 @@ func createSAPInstance(d *schema.ResourceData, sapClient *st.IBMPISAPInstanceCli
 	}
 	if u, ok := d.GetOk(helpers.PIInstanceUserData); ok {
 		userData := u.(string)
-		err := checkBase64(userData)
-		if err != nil {
-			log.Printf("Data is not base64 encoded")
-			return nil, err
-		}
-		body.UserData = userData
+		body.UserData = encodeBase64(userData)
 	}
 	if sys, ok := d.GetOk(helpers.PIInstanceSystemType); ok {
 		body.SysType = sys.(string)
@@ -1118,6 +1137,7 @@ func createSAPInstance(d *schema.ResourceData, sapClient *st.IBMPISAPInstanceCli
 
 	return pvmList, nil
 }
+
 func createPVMInstance(d *schema.ResourceData, client *st.IBMPIInstanceClient, imageClient *st.IBMPIImageClient) (*models.PVMInstanceList, error) {
 
 	name := d.Get(helpers.PIInstanceName).(string)
@@ -1181,11 +1201,6 @@ func createPVMInstance(d *schema.ResourceData, client *st.IBMPIInstanceClient, i
 	if u, ok := d.GetOk(helpers.PIInstanceUserData); ok {
 		userData = u.(string)
 	}
-	err := checkBase64(userData)
-	if err != nil {
-		log.Printf("Data is not base64 encoded")
-		return nil, err
-	}
 
 	//publicinterface := d.Get(helpers.PIInstancePublicNetwork).(bool)
 	body := &models.PVMInstanceCreate{
@@ -1197,7 +1212,7 @@ func createPVMInstance(d *schema.ResourceData, client *st.IBMPIInstanceClient, i
 		ImageID:                 flex.PtrToString(imageid),
 		ProcType:                flex.PtrToString(processortype),
 		Replicants:              replicants,
-		UserData:                userData,
+		UserData:                encodeBase64(userData),
 		ReplicantNamingScheme:   flex.PtrToString(replicationNamingScheme),
 		ReplicantAffinityPolicy: flex.PtrToString(replicationpolicy),
 		Networks:                pvmNetworks,
@@ -1265,6 +1280,10 @@ func createPVMInstance(d *schema.ResourceData, client *st.IBMPIInstanceClient, i
 
 	if pg, ok := d.GetOk(helpers.PIPlacementGroupID); ok {
 		body.PlacementGroup = pg.(string)
+	}
+
+	if spp, ok := d.GetOk(Arg_PIInstanceSharedProcessorPool); ok {
+		body.SharedProcessorPool = spp.(string)
 	}
 
 	if lrc, ok := d.GetOk(helpers.PIInstanceLicenseRepositoryCapacity); ok {

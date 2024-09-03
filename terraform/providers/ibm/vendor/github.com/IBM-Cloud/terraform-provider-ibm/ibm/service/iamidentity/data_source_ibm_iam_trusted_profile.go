@@ -10,6 +10,7 @@ import (
 
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/conns"
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/flex"
+	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/validate"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 
@@ -25,6 +26,8 @@ func DataSourceIBMIamTrustedProfile() *schema.Resource {
 				Type:        schema.TypeString,
 				Required:    true,
 				Description: "ID of the trusted profile to get.",
+				ValidateFunc: validate.InvokeDataSourceValidator("ibm_iam_trusted_profile",
+					"profile_id"),
 			},
 			"entity_tag": {
 				Type:        schema.TypeString,
@@ -76,6 +79,16 @@ func DataSourceIBMIamTrustedProfile() *schema.Resource {
 				Computed:    true,
 				Description: "IMS user ID of the trusted profile.",
 			},
+			"template_id": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Template id the profile was created from.",
+			},
+			"assignment_id": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Id of assignment that assigned the template.",
+			},
 			"history": {
 				Type:        schema.TypeList,
 				Computed:    true,
@@ -120,6 +133,21 @@ func DataSourceIBMIamTrustedProfile() *schema.Resource {
 			},
 		},
 	}
+}
+
+func DataSourceIBMIamTrustedProfileValidator() *validate.ResourceValidator {
+	validateSchema := make([]validate.ValidateSchema, 0)
+	validateSchema = append(validateSchema,
+		validate.ValidateSchema{
+			Identifier:                 "profile_id",
+			ValidateFunctionIdentifier: validate.ValidateCloudData,
+			Type:                       validate.TypeString,
+			CloudDataType:              "iam",
+			CloudDataRange:             []string{"service:trusted_profile", "resolved_to:id"},
+			Required:                   true})
+
+	iBMIamTrustedProfileValidator := validate.ResourceValidator{ResourceName: "ibm_iam_trusted_profile", Schema: validateSchema}
+	return &iBMIamTrustedProfileValidator
 }
 
 func dataSourceIBMIamTrustedProfileRead(context context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
@@ -169,6 +197,12 @@ func dataSourceIBMIamTrustedProfileRead(context context.Context, d *schema.Resou
 	}
 	if err = d.Set("ims_user_id", flex.IntValue(trustedProfile.ImsUserID)); err != nil {
 		return diag.FromErr(fmt.Errorf("[ERROR] Error setting ims_user_id: %s", err))
+	}
+	if err = d.Set("template_id", trustedProfile.TemplateID); err != nil {
+		return diag.FromErr(fmt.Errorf("[ERROR] Error setting template_id: %s", err))
+	}
+	if err = d.Set("assignment_id", trustedProfile.AssignmentID); err != nil {
+		return diag.FromErr(fmt.Errorf("[ERROR] Error setting assignment_id: %s", err))
 	}
 
 	err = d.Set("history", dataSourceTrustedProfileFlattenHistory(trustedProfile.History))

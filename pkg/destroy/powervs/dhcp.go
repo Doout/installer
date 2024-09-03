@@ -1,12 +1,13 @@
 package powervs
 
 import (
+	"context"
+	"fmt"
 	"math"
 	"strings"
 	"time"
 
 	"github.com/IBM-Cloud/power-go-client/power/models"
-	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -24,6 +25,12 @@ func (o *ClusterUninstaller) listDHCPNetworks() (cloudResources, error) {
 
 	o.Logger.Debugf("Listing DHCP networks")
 
+	if o.dhcpClient == nil {
+		o.Logger.Infof("Skipping deleting DHCP servers because no service instance was found")
+		result := []cloudResource{}
+		return cloudResources{}.insert(result...), nil
+	}
+
 	dhcpServers, err = o.dhcpClient.GetAll()
 	if err != nil {
 		o.Logger.Fatalf("Failed to list DHCP servers: %v", err)
@@ -38,7 +45,34 @@ func (o *ClusterUninstaller) listDHCPNetworks() (cloudResources, error) {
 			continue
 		}
 		if dhcpServer.Network.Name == nil {
+			// https://github.com/IBM-Cloud/power-go-client/blob/master/power/models/p_vm_instance.go#L22
+			var instance *models.PVMInstance
+
 			o.Logger.Debugf("listDHCPNetworks: DHCP has empty Network.Name: %s", *dhcpServer.ID)
+
+			instance, err = o.instanceClient.Get(*dhcpServer.ID)
+			o.Logger.Debugf("listDHCPNetworks: Getting instance %s %v", *dhcpServer.ID, err)
+			if err != nil {
+				continue
+			}
+
+			if instance.Status == nil {
+				continue
+			}
+			// If there is a backing DHCP VM and it has a status, then check for an ERROR state
+			o.Logger.Debugf("listDHCPNetworks: instance.Status: %s", *instance.Status)
+			if *instance.Status != "ERROR" {
+				continue
+			}
+
+			foundOne = true
+			result = append(result, cloudResource{
+				key:      *dhcpServer.ID,
+				name:     *dhcpServer.ID,
+				status:   "VM",
+				typeName: dhcpTypeName,
+				id:       *dhcpServer.ID,
+			})
 			continue
 		}
 
@@ -48,7 +82,7 @@ func (o *ClusterUninstaller) listDHCPNetworks() (cloudResources, error) {
 			result = append(result, cloudResource{
 				key:      *dhcpServer.ID,
 				name:     *dhcpServer.Network.Name,
-				status:   "",
+				status:   "DHCP",
 				typeName: dhcpTypeName,
 				id:       *dhcpServer.ID,
 			})
@@ -94,6 +128,30 @@ func (o *ClusterUninstaller) destroyDHCPNetwork(item cloudResource) error {
 	return nil
 }
 
+func (o *ClusterUninstaller) destroyDHCPVM(item cloudResource) error {
+	var err error
+
+	_, err = o.instanceClient.Get(item.id)
+	if err != nil {
+		o.deletePendingItems(item.typeName, []cloudResource{item})
+		o.Logger.Infof("Deleted DHCP VM %q", item.name)
+		return nil
+	}
+
+	o.Logger.Debugf("Deleting DHCP VM %q", item.name)
+
+	err = o.instanceClient.Delete(item.id)
+	if err != nil {
+		o.Logger.Infof("Error: DHCP o.instanceClient.Delete: %q", err)
+		return err
+	}
+
+	o.deletePendingItems(item.typeName, []cloudResource{item})
+	o.Logger.Infof("Deleted DHCP VM %q", item.name)
+
+	return nil
+}
+
 // destroyDHCPNetworks searches for DHCP networks that are in a previous list
 // the cluster's infra ID.
 func (o *ClusterUninstaller) destroyDHCPNetworks() error {
@@ -124,8 +182,18 @@ func (o *ClusterUninstaller) destroyDHCPNetworks() error {
 			Factor:   1.1,
 			Cap:      leftInContext(ctx),
 			Steps:    math.MaxInt32}
-		err = wait.ExponentialBackoffWithContext(ctx, backoff, func() (bool, error) {
-			err2 := o.destroyDHCPNetwork(item)
+		err = wait.ExponentialBackoffWithContext(ctx, backoff, func(context.Context) (bool, error) {
+			var err2 error
+
+			switch item.status {
+			case "DHCP":
+				err2 = o.destroyDHCPNetwork(item)
+			case "VM":
+				err2 = o.destroyDHCPVM(item)
+			default:
+				err2 = fmt.Errorf("unknown DHCP item status %s", item.status)
+				return true, err2
+			}
 			if err2 == nil {
 				return true, err2
 			}
@@ -141,7 +209,7 @@ func (o *ClusterUninstaller) destroyDHCPNetworks() error {
 		for _, item := range items {
 			o.Logger.Debugf("destroyDHCPNetworks: found %s in pending items", item.name)
 		}
-		return errors.Errorf("destroyDHCPNetworks: %d undeleted items pending", len(items))
+		return fmt.Errorf("destroyDHCPNetworks: %d undeleted items pending", len(items))
 	}
 
 	backoff := wait.Backoff{
@@ -149,7 +217,7 @@ func (o *ClusterUninstaller) destroyDHCPNetworks() error {
 		Factor:   1.1,
 		Cap:      leftInContext(ctx),
 		Steps:    math.MaxInt32}
-	err = wait.ExponentialBackoffWithContext(ctx, backoff, func() (bool, error) {
+	err = wait.ExponentialBackoffWithContext(ctx, backoff, func(context.Context) (bool, error) {
 		secondPassList, err2 := o.listDHCPNetworks()
 		if err2 != nil {
 			return false, err2

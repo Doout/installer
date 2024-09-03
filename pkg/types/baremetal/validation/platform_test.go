@@ -1,14 +1,15 @@
 package validation
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/ghodss/yaml"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"sigs.k8s.io/yaml"
 
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/installer/pkg/ipnet"
@@ -49,6 +50,15 @@ func TestValidatePlatform(t *testing.T) {
 			platform: platform().
 				Hosts().build(),
 			expected: "bare metal hosts are missing",
+		},
+		{
+			name: "no_hosts_machineapi_disabled",
+			config: installConfig().
+				Capabilities(types.Capabilities{BaselineCapabilitySet: configv1.ClusterVersionCapabilitySetNone,
+					AdditionalEnabledCapabilities: []configv1.ClusterVersionCapability{configv1.ClusterVersionCapabilityIngress,
+						configv1.ClusterVersionCapabilityBaremetal}}).
+				BareMetalPlatform(
+					platform().Hosts()).build(),
 		},
 		{
 			name: "toofew_masters_norole",
@@ -180,13 +190,6 @@ func TestValidatePlatform(t *testing.T) {
 						host1().Name(""))).
 				ControlPlane(machinePool().Replicas(1)).build(),
 			expected: "baremetal.hosts\\[0\\].Name: Required value: missing Name",
-		},
-		{
-			name: "forbidden_feature_loadbalancer",
-			config: installConfig().
-				BareMetalPlatform(
-					platform().LoadBalancerType("OpenShiftManagedDefault")).build(),
-			expected: "baremetal.loadBalancer: Forbidden: load balancer is not supported in this feature set",
 		},
 		{
 			name: "allowed_feature_loadbalancer_openshift_managed_default",
@@ -359,6 +362,62 @@ interfaces:
 	}
 }
 
+func TestValidateHostRootDeviceHints(t *testing.T) {
+	cases := []struct {
+		name            string
+		rootDeviceHints *baremetal.RootDeviceHints
+		expectedSuccess bool
+	}{
+		{
+			name:            "nil hints",
+			expectedSuccess: true,
+		},
+		{
+			name:            "no hints",
+			rootDeviceHints: &baremetal.RootDeviceHints{},
+			expectedSuccess: true,
+		},
+		{
+			name: "non /dev path",
+			rootDeviceHints: &baremetal.RootDeviceHints{
+				DeviceName: "sda",
+			},
+		},
+		{
+			name: "/dev path",
+			rootDeviceHints: &baremetal.RootDeviceHints{
+				DeviceName: "/dev/sda",
+			},
+			expectedSuccess: true,
+		},
+		{
+			name: "by-path path",
+			rootDeviceHints: &baremetal.RootDeviceHints{
+				DeviceName: "/dev/disk/by-path/pci-0000:01:00.0-scsi-0:2:0:0",
+			},
+			expectedSuccess: true,
+		},
+		{
+			name: "by-id path",
+			rootDeviceHints: &baremetal.RootDeviceHints{
+				DeviceName: "/dev/disk/by-id/wwn-0x600508e000000000ce506dc50ab0ad05",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := ValidateHostRootDeviceHints(tc.rootDeviceHints, field.NewPath("rootDeviceHints"))
+
+			if tc.expectedSuccess {
+				assert.Empty(t, errs)
+			} else {
+				assert.NotEmpty(t, errs)
+			}
+		})
+	}
+}
+
 func TestValidateProvisioning(t *testing.T) {
 	//Used for url validations
 	imagesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -369,21 +428,22 @@ func TestValidateProvisioning(t *testing.T) {
 	}))
 	defer imagesServer.Close()
 
-	interfaceValidator := func(p *baremetal.Platform, fldPath *field.Path) field.ErrorList {
-		errorList := field.ErrorList{}
+	origInterfaceValidator := interfaceValidator
+	t.Cleanup(func() {
+		interfaceValidator = origInterfaceValidator
+	})
+	interfaceValidator = func(libvirtURI string) (func(string) error, error) {
+		return func(interfaceName string) error {
+			interfaceNames := []string{"br0", "br1"}
+			for _, foundInterface := range interfaceNames {
+				if foundInterface == interfaceName {
+					return nil
+				}
+			}
 
-		if p.ExternalBridge != "br0" {
-			errorList = append(errorList, field.Invalid(fldPath.Child("externalBridge"), p.ExternalBridge,
-				"invalid external bridge"))
-		}
-		if p.ProvisioningBridge != "br1" {
-			errorList = append(errorList, field.Invalid(fldPath.Child("provisioningBridge"), p.ProvisioningBridge,
-				"invalid provisioning bridge"))
-		}
-
-		return errorList
+			return fmt.Errorf("could not find interface %q, valid interfaces are %s", interfaceName, strings.Join(interfaceNames, ", "))
+		}, nil
 	}
-	dynamicProvisioningValidators = append(dynamicProvisioningValidators, interfaceValidator)
 
 	cases := []struct {
 		name     string
@@ -475,7 +535,7 @@ func TestValidateProvisioning(t *testing.T) {
 			name: "invalid_extbridge",
 			platform: platform().
 				ExternalBridge("noexist").build(),
-			expected: "Invalid value: \"noexist\": invalid external bridge",
+			expected: "Invalid value: \"noexist\": could not find interface \"noexist\", valid interfaces are br0, br1",
 		},
 		{
 			name:     "valid_extbridge_mac",
@@ -485,7 +545,7 @@ func TestValidateProvisioning(t *testing.T) {
 			name: "invalid_provbridge",
 			platform: platform().
 				ProvisioningBridge("noexist").build(),
-			expected: "Invalid value: \"noexist\": invalid provisioning bridge",
+			expected: "Invalid value: \"noexist\": could not find interface \"noexist\", valid interfaces are br0, br1",
 		},
 		{
 			name:     "valid_provbridge_mac",
@@ -950,6 +1010,11 @@ func (icb *installConfigBuilder) BareMetalPlatform(builder *platformBuilder) *in
 	icb.InstallConfig.Platform = types.Platform{
 		BareMetal: builder.build(),
 	}
+	return icb
+}
+
+func (icb *installConfigBuilder) Capabilities(capabilities types.Capabilities) *installConfigBuilder {
+	icb.InstallConfig.Capabilities = &capabilities
 	return icb
 }
 

@@ -52,23 +52,6 @@ func TestValidatePlatform(t *testing.T) {
 			valid:      true,
 		},
 		{
-			name:     "forbidden load balancer field",
-			platform: validPlatform(),
-			config: &types.InstallConfig{
-				Platform: types.Platform{
-					OpenStack: func() *openstack.Platform {
-						p := validPlatform()
-						p.LoadBalancer = &configv1.OpenStackPlatformLoadBalancer{
-							Type: configv1.LoadBalancerTypeOpenShiftManagedDefault,
-						}
-						return p
-					}(),
-				},
-			},
-			valid:         false,
-			expectedError: `^test-path\.loadBalancer: Forbidden: load balancer is not supported in this feature set`,
-		},
-		{
 			name:     "allowed load balancer field with OpenShift managed default",
 			platform: validPlatform(),
 			config: &types.InstallConfig{
@@ -144,6 +127,21 @@ func TestValidatePlatform(t *testing.T) {
 			}(),
 			networking: validNetworking(),
 			valid:      true,
+		},
+		{
+			name: "invalid subnet ID",
+			platform: func() *openstack.Platform {
+				p := validPlatform()
+				fixedIP := openstack.FixedIP{
+					Subnet: openstack.SubnetFilter{ID: "fake"},
+				}
+				p.ControlPlanePort = &openstack.PortTarget{
+					FixedIPs: []openstack.FixedIP{fixedIP},
+				}
+				return p
+			}(),
+			networking:    validNetworking(),
+			expectedError: `^test-path\.controlPlanePort.fixedIPs\[0\]\.subnet.id: Invalid value: "fake": invalid subnet ID`,
 		},
 	}
 	for _, tc := range cases {

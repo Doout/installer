@@ -7,13 +7,10 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 
-	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/conns"
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/flex"
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/validate"
 	kp "github.com/IBM/keyprotect-go-client"
-	rc "github.com/IBM/platform-services-go-sdk/resourcecontrollerv2"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
@@ -80,6 +77,10 @@ func DataSourceIBMKMSkeys() *schema.Resource {
 							Type:     schema.TypeString,
 							Computed: true,
 						},
+						"description": {
+							Type:     schema.TypeString,
+							Computed: true,
+						},
 						"key_ring_id": {
 							Type:        schema.TypeString,
 							Computed:    true,
@@ -103,6 +104,11 @@ func DataSourceIBMKMSkeys() *schema.Resource {
 													Type:     schema.TypeString,
 													Computed: true,
 												},
+												"crn": {
+													Type:        schema.TypeString,
+													Computed:    true,
+													Description: "Cloud Resource Name (CRN) that uniquely identifies your cloud resources.",
+												},
 												"created_by": {
 													Type:     schema.TypeString,
 													Computed: true,
@@ -123,6 +129,10 @@ func DataSourceIBMKMSkeys() *schema.Resource {
 													Type:     schema.TypeInt,
 													Computed: true,
 												},
+												"enabled": {
+													Type:     schema.TypeBool,
+													Computed: true,
+												},
 											},
 										},
 									},
@@ -134,6 +144,11 @@ func DataSourceIBMKMSkeys() *schema.Resource {
 												"id": {
 													Type:     schema.TypeString,
 													Computed: true,
+												},
+												"crn": {
+													Type:        schema.TypeString,
+													Computed:    true,
+													Description: "Cloud Resource Name (CRN) that uniquely identifies your cloud resources.",
 												},
 												"created_by": {
 													Type:     schema.TypeString,
@@ -170,38 +185,11 @@ func DataSourceIBMKMSkeys() *schema.Resource {
 }
 
 func dataSourceIBMKMSKeysRead(d *schema.ResourceData, meta interface{}) error {
-	api, err := meta.(conns.ClientSession).KeyManagementAPI()
+	instanceID := getInstanceIDFromCRN(d.Get("instance_id").(string))
+	api, _, err := populateKPClient(d, meta, instanceID)
 	if err != nil {
 		return err
 	}
-
-	instanceID := d.Get("instance_id").(string)
-	CrnInstanceID := strings.Split(instanceID, ":")
-	if len(CrnInstanceID) > 3 {
-		instanceID = CrnInstanceID[len(CrnInstanceID)-3]
-	}
-	endpointType := d.Get("endpoint_type").(string)
-
-	rsConClient, err := meta.(conns.ClientSession).ResourceControllerV2API()
-	if err != nil {
-		return err
-	}
-	resourceInstanceGet := rc.GetResourceInstanceOptions{
-		ID: &instanceID,
-	}
-
-	instanceData, resp, err := rsConClient.GetResourceInstance(&resourceInstanceGet)
-	if err != nil || instanceData == nil {
-		return fmt.Errorf("[ERROR] Error retrieving resource instance: %s with resp code: %s", err, resp)
-	}
-	extensions := instanceData.Extensions
-	URL, err := KmsEndpointURL(api, endpointType, extensions)
-	if err != nil {
-		return err
-	}
-	api.URL = URL
-
-	api.Config.InstanceID = instanceID
 	var totalKeys []kp.Key
 	if v, ok := d.GetOk("alias"); ok {
 		aliasName := v.(string)
@@ -215,8 +203,18 @@ func dataSourceIBMKMSKeysRead(d *schema.ResourceData, meta interface{}) error {
 		keyInstance["name"] = key.Name
 		keyInstance["crn"] = key.CRN
 		keyInstance["standard_key"] = key.Extractable
+		keyInstance["description"] = key.Description
 		keyInstance["aliases"] = key.Aliases
 		keyInstance["key_ring_id"] = key.KeyRingID
+		policies, err := api.GetPolicies(context.Background(), key.ID)
+		if err != nil {
+			return fmt.Errorf("[ERROR] Failed to read policies: %s", err)
+		}
+		if len(policies) == 0 {
+			log.Printf("No Policy Configurations read\n")
+		} else {
+			keyInstance["policies"] = flex.FlattenKeyPolicies(policies)
+		}
 		keyMap = append(keyMap, keyInstance)
 		d.Set("keys", keyMap)
 
@@ -231,6 +229,7 @@ func dataSourceIBMKMSKeysRead(d *schema.ResourceData, meta interface{}) error {
 		keyInstance["name"] = key.Name
 		keyInstance["crn"] = key.CRN
 		keyInstance["standard_key"] = key.Extractable
+		keyInstance["description"] = key.Description
 		keyInstance["aliases"] = key.Aliases
 		keyInstance["key_ring_id"] = key.KeyRingID
 		policies, err := api.GetPolicies(context.Background(), key.ID)
@@ -294,6 +293,9 @@ func dataSourceIBMKMSKeysRead(d *schema.ResourceData, meta interface{}) error {
 				}
 			}
 		}
+		if len(totalKeys) == 0 {
+			return fmt.Errorf("[ERROR] No keys in instance %s", instanceID)
+		}
 		var keyName string
 		var matchKeys []kp.Key
 		if v, ok := d.GetOk("key_name"); ok {
@@ -319,6 +321,7 @@ func dataSourceIBMKMSKeysRead(d *schema.ResourceData, meta interface{}) error {
 			keyInstance["name"] = key.Name
 			keyInstance["crn"] = key.CRN
 			keyInstance["standard_key"] = key.Extractable
+			keyInstance["description"] = key.Description
 			keyInstance["aliases"] = key.Aliases
 			keyInstance["key_ring_id"] = key.KeyRingID
 			keyMap = append(keyMap, keyInstance)

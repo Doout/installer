@@ -1,16 +1,17 @@
 package machines
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
-	"github.com/ghodss/yaml"
 	"github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/pointer"
+	"sigs.k8s.io/yaml"
 
 	"github.com/openshift/installer/pkg/asset"
 	"github.com/openshift/installer/pkg/asset/ignition/machine"
@@ -44,6 +45,7 @@ metadata:
     machineconfiguration.openshift.io/role: master
   name: 99-master-ssh
 spec:
+  baseOSExtensionsContainerImage: ""
   config:
     ignition:
       version: 3.2.0
@@ -70,6 +72,7 @@ metadata:
     machineconfiguration.openshift.io/role: master
   name: 99-master-disable-hyperthreading
 spec:
+  baseOSExtensionsContainerImage: ""
   config:
     ignition:
       version: 3.2.0
@@ -77,6 +80,7 @@ spec:
   fips: false
   kernelArguments:
   - nosmt
+  - smt-enabled=off
   kernelType: ""
   osImageURL: ""
 `},
@@ -93,6 +97,7 @@ metadata:
     machineconfiguration.openshift.io/role: master
   name: 99-master-disable-hyperthreading
 spec:
+  baseOSExtensionsContainerImage: ""
   config:
     ignition:
       version: 3.2.0
@@ -100,6 +105,7 @@ spec:
   fips: false
   kernelArguments:
   - nosmt
+  - smt-enabled=off
   kernelType: ""
   osImageURL: ""
 `, `apiVersion: machineconfiguration.openshift.io/v1
@@ -110,6 +116,7 @@ metadata:
     machineconfiguration.openshift.io/role: master
   name: 99-master-ssh
 spec:
+  baseOSExtensionsContainerImage: ""
   config:
     ignition:
       version: 3.2.0
@@ -157,7 +164,7 @@ spec:
 							},
 						},
 					}),
-				(*rhcos.Image)(pointer.StringPtr("test-image")),
+				rhcos.MakeAsset("test-image"),
 				(*rhcos.Release)(pointer.StringPtr("412.86.202208101040-0")),
 				&machine.Master{
 					File: &asset.File{
@@ -167,7 +174,7 @@ spec:
 				},
 			)
 			master := &Master{}
-			if err := master.Generate(parents); err != nil {
+			if err := master.Generate(context.Background(), parents); err != nil {
 				t.Fatalf("failed to generate master machines: %v", err)
 			}
 			expectedLen := len(tc.expectedMachineConfig)
@@ -216,7 +223,7 @@ func TestControlPlaneIsNotModified(t *testing.T) {
 			InfraID: "test-infra-id",
 		},
 		installConfig,
-		(*rhcos.Image)(pointer.StringPtr("test-image")),
+		rhcos.MakeAsset("test-image"),
 		(*rhcos.Release)(pointer.StringPtr("412.86.202208101040-0")),
 		&machine.Master{
 			File: &asset.File{
@@ -226,7 +233,7 @@ func TestControlPlaneIsNotModified(t *testing.T) {
 		},
 	)
 	master := &Master{}
-	if err := master.Generate(parents); err != nil {
+	if err := master.Generate(context.Background(), parents); err != nil {
 		t.Fatalf("failed to generate master machines: %v", err)
 	}
 
@@ -285,7 +292,7 @@ func TestBaremetalGeneratedAssetFiles(t *testing.T) {
 			InfraID: "test-infra-id",
 		},
 		installConfig,
-		(*rhcos.Image)(pointer.StringPtr("test-image")),
+		rhcos.MakeAsset("test-image"),
 		(*rhcos.Release)(pointer.StringPtr("412.86.202208101040-0")),
 		&machine.Master{
 			File: &asset.File{
@@ -295,7 +302,7 @@ func TestBaremetalGeneratedAssetFiles(t *testing.T) {
 		},
 	)
 	master := &Master{}
-	assert.NoError(t, master.Generate(parents))
+	assert.NoError(t, master.Generate(context.Background(), parents))
 
 	assert.Len(t, master.HostFiles, 2)
 	verifyHost(t, master.HostFiles[0], "openshift/99_openshift-cluster-api_hosts-0.yaml", "master-0")
@@ -307,9 +314,11 @@ func TestBaremetalGeneratedAssetFiles(t *testing.T) {
 
 	assert.Len(t, master.NetworkConfigSecretFiles, 1)
 	verifySecret(t, master.NetworkConfigSecretFiles[0], "openshift/99_openshift-cluster-api_host-network-config-secrets-0.yaml", "master-0-network-config-secret", "map[nmstate:[105 110 116 101 114 102 97 99 101 115 58 32 110 117 108 108 10]]")
+	verifyManifestOwnership(t, master)
 }
 
 func verifyHost(t *testing.T, a *asset.File, eFilename, eName string) {
+	t.Helper()
 	assert.Equal(t, a.Filename, eFilename)
 	var host v1alpha1.BareMetalHost
 	assert.NoError(t, yaml.Unmarshal(a.Data, &host))
@@ -317,11 +326,19 @@ func verifyHost(t *testing.T, a *asset.File, eFilename, eName string) {
 }
 
 func verifySecret(t *testing.T, a *asset.File, eFilename, eName, eData string) {
+	t.Helper()
 	assert.Equal(t, a.Filename, eFilename)
 	var secret corev1.Secret
 	assert.NoError(t, yaml.Unmarshal(a.Data, &secret))
 	assert.Equal(t, eName, secret.Name)
 	assert.Equal(t, eData, fmt.Sprintf("%v", secret.Data))
+}
+
+func verifyManifestOwnership(t *testing.T, a asset.WritableAsset) {
+	t.Helper()
+	for _, file := range a.Files() {
+		assert.True(t, IsMachineManifest(file), file.Filename)
+	}
 }
 
 func networkConfig(config string) *v1.JSON {

@@ -1,6 +1,9 @@
 package validation
 
 import (
+	"fmt"
+	"regexp"
+
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	configv1 "github.com/openshift/api/config/v1"
@@ -10,7 +13,6 @@ import (
 )
 
 // ValidatePlatform checks that the specified platform is valid.
-// TODO(nutanix): Revisit for further expanding the validation logic
 func ValidatePlatform(p *nutanix.Platform, fldPath *field.Path, c *types.InstallConfig) field.ErrorList {
 	allErrs := field.ErrorList{}
 
@@ -71,16 +73,52 @@ func ValidatePlatform(p *nutanix.Platform, fldPath *field.Path, c *types.Install
 		allErrs = append(allErrs, field.Required(fldPath.Child("subnet"), "must specify the subnet"))
 	}
 
-	// Platform fields only allowed in TechPreviewNoUpgrade
-	if c.FeatureSet != configv1.TechPreviewNoUpgrade {
-		if c.Nutanix.LoadBalancer != nil {
-			allErrs = append(allErrs, field.Forbidden(fldPath.Child("loadBalancer"), "load balancer is not supported in this feature set"))
-		}
-	}
-
 	if c.Nutanix.LoadBalancer != nil {
 		if !validateLoadBalancer(c.Nutanix.LoadBalancer.Type) {
 			allErrs = append(allErrs, field.Invalid(fldPath.Child("loadBalancer", "type"), c.Nutanix.LoadBalancer.Type, "invalid load balancer type"))
+		}
+	}
+
+	// validate failureDomains if configured
+	if len(p.FailureDomains) > 0 {
+		pattern := "[a-z0-9]([-a-z0-9]*[a-z0-9])?"
+		rexp, err := regexp.Compile(pattern)
+		if err != nil {
+			allErrs = append(allErrs, field.InternalError(fldPath.Child("failureDomain", "name"), fmt.Errorf("fail to compile the pattern %q: %w", pattern, err)))
+		} else {
+			for _, fd := range p.FailureDomains {
+				if !rexp.MatchString(fd.Name) {
+					allErrs = append(allErrs, field.Invalid(fldPath.Child("failureDomain", "name"), fd.Name, fmt.Sprintf("failureDomain name should match the pattern %q.", pattern)))
+				}
+
+				if fd.PrismElement.UUID == "" {
+					allErrs = append(allErrs, field.Required(fldPath.Child("failureDomain", "prismElement", "uuid"), "failureDomain prismElement uuid cannot be empty"))
+				}
+
+				if len(fd.SubnetUUIDs) != 1 || p.SubnetUUIDs[0] == "" {
+					allErrs = append(allErrs, field.Invalid(fldPath.Child("failureDomain", "subnetUUIDs"), "", "must specify one failure domain subnet uuid"))
+				}
+
+				for _, sc := range fd.StorageContainers {
+					if sc.ReferenceName == "" {
+						allErrs = append(allErrs, field.Required(fldPath.Child("failureDomain", "storageContainers", "referenceName"), fmt.Sprintf("failureDomain %q: missing storageContainer referenceName", fd.Name)))
+					}
+
+					if sc.UUID == "" {
+						allErrs = append(allErrs, field.Required(fldPath.Child("failureDomain", "storageContainers", "uuid"), fmt.Sprintf("failureDomain %q: missing storageContainer uuid", fd.Name)))
+					}
+				}
+
+				for _, dsImg := range fd.DataSourceImages {
+					if dsImg.ReferenceName == "" {
+						allErrs = append(allErrs, field.Required(fldPath.Child("failureDomain", "dataSourceImages", "referenceName"), fmt.Sprintf("failureDomain %q: missing dataSourceImage referenceName", fd.Name)))
+					}
+
+					if dsImg.UUID == "" && dsImg.Name == "" {
+						allErrs = append(allErrs, field.Required(fldPath.Child("failureDomain", "dataSourceImages"), fmt.Sprintf("failureDomain %q: both the dataSourceImage's uuid and name are empty, you need to configure one.", fd.Name)))
+					}
+				}
+			}
 		}
 	}
 

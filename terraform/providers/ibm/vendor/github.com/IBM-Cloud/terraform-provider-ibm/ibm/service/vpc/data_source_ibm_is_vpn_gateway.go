@@ -159,6 +159,67 @@ func DataSourceIBMISVPNGateway() *schema.Resource {
 				Computed:    true,
 				Description: "The status of the VPN gateway.",
 			},
+			"health_state": &schema.Schema{
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "The health of this resource.- `ok`: Healthy- `degraded`: Suffering from compromised performance, capacity, or connectivity- `faulted`: Completely unreachable, inoperative, or otherwise entirely incapacitated- `inapplicable`: The health state does not apply because of the current lifecycle state. A resource with a lifecycle state of `failed` or `deleting` will have a health state of `inapplicable`. A `pending` resource may also have this state.",
+			},
+			"health_reasons": {
+				Type:     schema.TypeList,
+				Computed: true,
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"code": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "A snake case string succinctly identifying the reason for this health state.",
+						},
+
+						"message": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "An explanation of the reason for this health state.",
+						},
+
+						"more_info": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "Link to documentation about the reason for this health state.",
+						},
+					},
+				},
+			},
+			"lifecycle_state": &schema.Schema{
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "The lifecycle state of the VPN route.",
+			},
+			"lifecycle_reasons": {
+				Type:        schema.TypeList,
+				Computed:    true,
+				Description: "The reasons for the current lifecycle_state (if any).",
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"code": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "A snake case string succinctly identifying the reason for this lifecycle state.",
+						},
+
+						"message": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "An explanation of the reason for this lifecycle state.",
+						},
+
+						"more_info": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "Link to documentation about the reason for this lifecycle state.",
+						},
+					},
+				},
+			},
 			"subnet": {
 				Type:     schema.TypeList,
 				Computed: true,
@@ -205,6 +266,63 @@ func DataSourceIBMISVPNGateway() *schema.Resource {
 				Type:        schema.TypeString,
 				Computed:    true,
 				Description: "Route mode VPN gateway.",
+			},
+			"vpc": {
+				Type:        schema.TypeList,
+				Computed:    true,
+				Description: "VPC for the VPN Gateway",
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"crn": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "The CRN for this VPC.",
+						},
+						"deleted": {
+							Type:        schema.TypeList,
+							Computed:    true,
+							Description: "If present, this property indicates the referenced resource has been deleted and providessome supplementary information.",
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									"more_info": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "Link to documentation about deleted resources.",
+									},
+								},
+							},
+						},
+						"href": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "The URL for this VPC.",
+						},
+						"id": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "The unique identifier for this VPC.",
+						},
+						"name": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "The unique user-defined name for this VPC.",
+						},
+					},
+				},
+			},
+			isVPNGatewayTags: {
+				Type:        schema.TypeSet,
+				Computed:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString},
+				Set:         flex.ResourceIBMVPCHash,
+				Description: "VPN Gateway tags list",
+			},
+			isVPNGatewayAccessTags: {
+				Type:        schema.TypeSet,
+				Computed:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString},
+				Set:         flex.ResourceIBMVPCHash,
+				Description: "List of access management tags",
 			},
 		},
 	}
@@ -299,10 +417,18 @@ func dataSourceIBMIsVPNGatewayRead(context context.Context, d *schema.ResourceDa
 	if err = d.Set("resource_type", vpnGateway.ResourceType); err != nil {
 		return diag.FromErr(fmt.Errorf("Error setting resource_type: %s", err))
 	}
-	if err = d.Set("status", vpnGateway.Status); err != nil {
-		return diag.FromErr(fmt.Errorf("Error setting status: %s", err))
+	if err = d.Set("health_state", vpnGateway.HealthState); err != nil {
+		return diag.FromErr(fmt.Errorf("[ERROR] Error setting health_state: %s", err))
 	}
-
+	if err := d.Set("health_reasons", resourceVPNGatewayRouteFlattenHealthReasons(vpnGateway.HealthReasons)); err != nil {
+		return diag.FromErr(fmt.Errorf("[ERROR] Error setting health_reasons: %s", err))
+	}
+	if err = d.Set("lifecycle_state", vpnGateway.LifecycleState); err != nil {
+		return diag.FromErr(fmt.Errorf("[ERROR] Error setting lifecycle_state: %s", err))
+	}
+	if err := d.Set("lifecycle_reasons", resourceVPNGatewayFlattenLifecycleReasons(vpnGateway.LifecycleReasons)); err != nil {
+		return diag.FromErr(fmt.Errorf("[ERROR] Error setting lifecycle_reasons: %s", err))
+	}
 	if vpnGateway.Subnet != nil {
 		err = d.Set("subnet", dataSourceVPNGatewayFlattenSubnet(*vpnGateway.Subnet))
 		if err != nil {
@@ -312,7 +438,25 @@ func dataSourceIBMIsVPNGatewayRead(context context.Context, d *schema.ResourceDa
 	if err = d.Set("mode", vpnGateway.Mode); err != nil {
 		return diag.FromErr(fmt.Errorf("Error setting mode: %s", err))
 	}
+	if vpnGateway.VPC != nil {
+		err = d.Set("vpc", dataSourceVPNGatewayFlattenVPC(vpnGateway.VPC))
+		if err != nil {
+			return diag.FromErr(fmt.Errorf("Error setting vpc: %s", err))
+		}
+	}
+	tags, err := flex.GetGlobalTagsUsingCRN(meta, *vpnGateway.CRN, "", isUserTagType)
+	if err != nil {
+		log.Printf(
+			"Error on get of resource vpc VPN Gateway (%s) tags: %s", d.Id(), err)
+	}
+	d.Set(isVPNGatewayTags, tags)
 
+	accesstags, err := flex.GetGlobalTagsUsingCRN(meta, *vpnGateway.CRN, "", isAccessTagType)
+	if err != nil {
+		log.Printf(
+			"Error on get of resource VPC VPN Gateway (%s) access tags: %s", d.Id(), err)
+	}
+	d.Set(isVPNGatewayAccessTags, accesstags)
 	return nil
 }
 
@@ -379,9 +523,6 @@ func dataSourceVPNGatewayMembersToMap(membersItem vpcv1.VPNGatewayMember) (membe
 	if membersItem.Role != nil {
 		membersMap["role"] = membersItem.Role
 	}
-	if membersItem.Status != nil {
-		membersMap["status"] = membersItem.Status
-	}
 
 	return membersMap
 }
@@ -444,6 +585,47 @@ func dataSourceVPNGatewaySubnetToMap(subnetItem vpcv1.SubnetReference) (subnetMa
 }
 
 func dataSourceVPNGatewaySubnetDeletedToMap(deletedItem vpcv1.SubnetReferenceDeleted) (deletedMap map[string]interface{}) {
+	deletedMap = map[string]interface{}{}
+
+	if deletedItem.MoreInfo != nil {
+		deletedMap["more_info"] = deletedItem.MoreInfo
+	}
+
+	return deletedMap
+}
+
+func dataSourceVPNGatewayFlattenVPC(result *vpcv1.VPCReference) (vpcs []map[string]interface{}) {
+	vpcs = append(vpcs, dataSourceVPNGatewayVpcToMap(*result))
+	return vpcs
+}
+
+func dataSourceVPNGatewayVpcToMap(vpcItem vpcv1.VPCReference) (vpcsMap map[string]interface{}) {
+	vpcsMap = map[string]interface{}{}
+
+	if vpcItem.CRN != nil {
+		vpcsMap["crn"] = vpcItem.CRN
+	}
+	if vpcItem.Deleted != nil {
+		deletedList := []map[string]interface{}{}
+		deletedMap := dataSourceVPNGatewayVpcDeletedToMap(*vpcItem.Deleted)
+		deletedList = append(deletedList, deletedMap)
+		vpcsMap["deleted"] = deletedList
+	}
+	if vpcItem.Href != nil {
+		vpcsMap["href"] = vpcItem.Href
+	}
+	if vpcItem.ID != nil {
+		vpcsMap["id"] = vpcItem.ID
+	}
+	if vpcItem.Name != nil {
+		vpcsMap["name"] = vpcItem.Name
+	}
+
+	return vpcsMap
+
+}
+
+func dataSourceVPNGatewayVpcDeletedToMap(deletedItem vpcv1.VPCReferenceDeleted) (deletedMap map[string]interface{}) {
 	deletedMap = map[string]interface{}{}
 
 	if deletedItem.MoreInfo != nil {

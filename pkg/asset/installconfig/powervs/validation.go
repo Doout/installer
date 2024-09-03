@@ -2,7 +2,10 @@ package powervs
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -25,6 +28,15 @@ func Validate(config *types.InstallConfig) error {
 			fldPath := field.NewPath("compute").Index(idx)
 			allErrs = append(allErrs, validateMachinePool(fldPath, &compute)...)
 		}
+		// Machine pool CIDR check
+		for i := range config.Networking.MachineNetwork {
+			// Each machine pool CIDR must have 24 significant bits (/24)
+			if bits, _ := config.Networking.MachineNetwork[i].CIDR.Mask.Size(); bits != 24 {
+				// If not, create an error displaying the CIDR in the install config vs the expectation (/24)
+				fldPath := field.NewPath("Networking")
+				allErrs = append(allErrs, field.Invalid(fldPath.Child("MachineNetwork").Child("CIDR"), (&config.Networking.MachineNetwork[i].CIDR).String(), "Machine Pool CIDR must be /24."))
+			}
+		}
 	}
 	return allErrs.ToAggregate()
 }
@@ -35,6 +47,24 @@ func validateMachinePool(fldPath *field.Path, machinePool *types.MachinePool) fi
 		allErrs = append(allErrs, field.NotSupported(fldPath.Child("architecture"), machinePool.Architecture, []string{"ppc64le"}))
 	}
 	return allErrs
+}
+
+// ValidatePERAvailability ensures the target datacenter has PER enabled.
+func ValidatePERAvailability(client API, ic *types.InstallConfig) error {
+	capabilities, err := client.GetDatacenterCapabilities(context.TODO(), ic.PowerVS.Zone)
+	if err != nil {
+		return err
+	}
+	const per = "power-edge-router"
+	perAvail, ok := capabilities[per]
+	if !ok {
+		return fmt.Errorf("%s capability unknown at: %s", per, ic.PowerVS.Zone)
+	}
+	if !perAvail {
+		return fmt.Errorf("%s is not available at: %s", per, ic.PowerVS.Zone)
+	}
+
+	return nil
 }
 
 // ValidatePreExistingDNS ensures no pre-existing DNS record exists in the CIS
@@ -182,4 +212,98 @@ func findSubnetInVPC(client API, subnets []string, region string, name string, p
 	}
 
 	return allErrs
+}
+
+// ValidateResourceGroup validates the resource group in our install config.
+func ValidateResourceGroup(client API, ic *types.InstallConfig) error {
+	ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Minute)
+	defer cancel()
+
+	resourceGroups, err := client.ListResourceGroups(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list resourceGroups: %w", err)
+	}
+
+	switch ic.PowerVS.PowerVSResourceGroup {
+	case "":
+		return errors.New("platform:powervs:powervsresourcegroup is empty")
+	case "Default":
+		found := false
+		for _, resourceGroup := range resourceGroups.Resources {
+			if resourceGroup.Default != nil && *resourceGroup.Default {
+				found = true
+				ic.PowerVS.PowerVSResourceGroup = *resourceGroup.Name
+				break
+			}
+		}
+		if !found {
+			return errors.New("platform:powervs:powervsresourcegroup is default but no default exists")
+		}
+	default:
+		found := false
+		for _, resourceGroup := range resourceGroups.Resources {
+			if *resourceGroup.Name == ic.PowerVS.PowerVSResourceGroup {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errors.New("platform:powervs:powervsresourcegroup has an invalid name")
+		}
+	}
+
+	return nil
+}
+
+// ValidateSystemTypeForRegion checks if the specified sysType is available in the target region.
+func ValidateSystemTypeForRegion(client API, ic *types.InstallConfig) error {
+	if ic.ControlPlane == nil || ic.ControlPlane.Platform.PowerVS == nil || ic.ControlPlane.Platform.PowerVS.SysType == "" {
+		return nil
+	}
+	availableOnes, err := powervstypes.AvailableSysTypes(ic.PowerVS.Region)
+	if err != nil {
+		return fmt.Errorf("failed to obtain available SysTypes for: %s", ic.PowerVS.Region)
+	}
+	requested := ic.ControlPlane.Platform.PowerVS.SysType
+	found := false
+	for i := range availableOnes {
+		if requested == availableOnes[i] {
+			found = true
+			break
+		}
+	}
+	if found {
+		return nil
+	}
+	return fmt.Errorf("%s is not available in: %s", requested, ic.PowerVS.Region)
+}
+
+// ValidateServiceInstance validates the optional service instance GUID in our install config.
+func ValidateServiceInstance(client API, ic *types.InstallConfig) error {
+	ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Minute)
+	defer cancel()
+
+	serviceInstances, err := client.ListServiceInstances(ctx)
+	if err != nil {
+		return err
+	}
+
+	switch ic.PowerVS.ServiceInstanceGUID {
+	case "":
+		return nil
+	default:
+		found := false
+		for _, serviceInstance := range serviceInstances {
+			guid := strings.SplitN(serviceInstance, " ", 2)[1]
+			if guid == ic.PowerVS.ServiceInstanceGUID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errors.New("platform:powervs:serviceInstanceGUID has an invalid guid")
+		}
+	}
+
+	return nil
 }

@@ -2,18 +2,18 @@ package image
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/coreos/ignition/v2/config/util"
 	igntypes "github.com/coreos/ignition/v2/config/v3_2/types"
 	"github.com/coreos/stream-metadata-go/arch"
-	"github.com/google/uuid"
+	"github.com/coreos/stream-metadata-go/stream"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
@@ -22,23 +22,32 @@ import (
 	"github.com/openshift/assisted-service/api/v1beta1"
 	"github.com/openshift/assisted-service/models"
 	"github.com/openshift/installer/pkg/asset"
+	agentcommon "github.com/openshift/installer/pkg/asset/agent"
 	"github.com/openshift/installer/pkg/asset/agent/agentconfig"
+	"github.com/openshift/installer/pkg/asset/agent/common"
+	"github.com/openshift/installer/pkg/asset/agent/gencrypto"
+	"github.com/openshift/installer/pkg/asset/agent/joiner"
 	"github.com/openshift/installer/pkg/asset/agent/manifests"
 	"github.com/openshift/installer/pkg/asset/agent/mirror"
+	"github.com/openshift/installer/pkg/asset/agent/workflow"
 	"github.com/openshift/installer/pkg/asset/ignition"
 	"github.com/openshift/installer/pkg/asset/ignition/bootstrap"
 	"github.com/openshift/installer/pkg/asset/password"
 	"github.com/openshift/installer/pkg/asset/tls"
-	"github.com/openshift/installer/pkg/rhcos"
 	"github.com/openshift/installer/pkg/types"
 	"github.com/openshift/installer/pkg/types/agent"
 	"github.com/openshift/installer/pkg/version"
 )
 
+const addNodesEnvPath = "/etc/assisted/add-nodes.env"
+const rendezvousHostEnvPath = "/etc/assisted/rendezvous-host.env"
 const manifestPath = "/etc/assisted/manifests"
 const hostnamesPath = "/etc/assisted/hostnames"
 const nmConnectionsPath = "/etc/assisted/network"
 const extraManifestPath = "/etc/assisted/extra-manifests"
+const registriesConfPath = "/etc/containers/registries.conf"
+const registryCABundlePath = "/etc/pki/ca-trust/source/anchors/domain.crt"
+const clusterConfigPath = "/etc/assisted/clusterconfig"
 
 // Ignition is an asset that generates the agent installer ignition file.
 type Ignition struct {
@@ -51,11 +60,7 @@ type Ignition struct {
 // files.
 type agentTemplateData struct {
 	ServiceProtocol           string
-	ServiceBaseURL            string
 	PullSecret                string
-	NodeZeroIP                string
-	AssistedServiceHost       string
-	APIVIP                    string
 	ControlPlaneAgents        int
 	WorkerAgents              int
 	ReleaseImages             string
@@ -67,6 +72,13 @@ type agentTemplateData struct {
 	ClusterName               string
 	OSImage                   *models.OsImage
 	Proxy                     *v1beta1.Proxy
+	ConfigImageFiles          string
+	ImageTypeISO              string
+	PublicKeyPEM              string
+	Token                     string
+	TokenExpiry               string
+	AuthType                  string
+	CaBundleMount             string
 }
 
 // Name returns the human-friendly name of the asset.
@@ -77,6 +89,9 @@ func (a *Ignition) Name() string {
 // Dependencies returns the assets on which the Ignition asset depends.
 func (a *Ignition) Dependencies() []asset.Asset {
 	return []asset.Asset{
+		&workflow.AgentWorkflow{},
+		&joiner.ClusterInfo{},
+		&joiner.AddNodesConfig{},
 		&manifests.AgentManifests{},
 		&manifests.ExtraManifests{},
 		&tls.KubeAPIServerLBSignerCertKey{},
@@ -85,17 +100,26 @@ func (a *Ignition) Dependencies() []asset.Asset {
 		&tls.AdminKubeConfigSignerCertKey{},
 		&password.KubeadminPassword{},
 		&agentconfig.AgentConfig{},
+		&agentconfig.AgentHosts{},
 		&mirror.RegistriesConf{},
 		&mirror.CaBundle{},
+		&gencrypto.AuthConfig{},
+		&common.InfraEnvID{},
 	}
 }
 
 // Generate generates the agent installer ignition.
-func (a *Ignition) Generate(dependencies asset.Parents) error {
+func (a *Ignition) Generate(_ context.Context, dependencies asset.Parents) error {
+	agentWorkflow := &workflow.AgentWorkflow{}
+	clusterInfo := &joiner.ClusterInfo{}
+	addNodesConfig := &joiner.AddNodesConfig{}
 	agentManifests := &manifests.AgentManifests{}
 	agentConfigAsset := &agentconfig.AgentConfig{}
+	agentHostsAsset := &agentconfig.AgentHosts{}
 	extraManifests := &manifests.ExtraManifests{}
-	dependencies.Get(agentManifests, agentConfigAsset, extraManifests)
+	authConfig := &gencrypto.AuthConfig{}
+	infraEnvAsset := &common.InfraEnvID{}
+	dependencies.Get(agentManifests, agentConfigAsset, agentHostsAsset, extraManifests, authConfig, agentWorkflow, clusterInfo, addNodesConfig, infraEnvAsset)
 
 	pwd := &password.KubeadminPassword{}
 	dependencies.Get(pwd)
@@ -120,21 +144,94 @@ func (a *Ignition) Generate(dependencies asset.Parents) error {
 		},
 	}
 
-	nodeZeroIP, err := RetrieveRendezvousIP(agentConfigAsset.Config, agentManifests.NMStateConfigs)
-	if err != nil {
-		return err
+	clusterName := ""
+	imageTypeISO := "full-iso"
+	numMasters := 0
+	numWorkers := 0
+	enabledServices := getDefaultEnabledServices()
+	openshiftVersion := ""
+	var err error
+	var streamGetter CoreOSBuildFetcher
+
+	switch agentWorkflow.Workflow {
+	case workflow.AgentWorkflowTypeInstall:
+		// Set rendezvous IP.
+		nodeZeroIP, err := RetrieveRendezvousIP(agentConfigAsset.Config, agentHostsAsset.Hosts, agentManifests.NMStateConfigs)
+		if err != nil {
+			return err
+		}
+		a.RendezvousIP = nodeZeroIP
+		logrus.Infof("The rendezvous host IP (node0 IP) is %s", a.RendezvousIP)
+		// Define cluster name and image type.
+		clusterName = fmt.Sprintf("%s.%s", agentManifests.ClusterDeployment.Spec.ClusterName, agentManifests.ClusterDeployment.Spec.BaseDomain)
+		if agentManifests.AgentClusterInstall.Spec.PlatformType == hiveext.ExternalPlatformType {
+			imageTypeISO = "minimal-iso"
+		}
+		// Fetch the required number of master and worker nodes.
+		numMasters = agentManifests.AgentClusterInstall.Spec.ProvisionRequirements.ControlPlaneAgents
+		numWorkers = agentManifests.AgentClusterInstall.Spec.ProvisionRequirements.WorkerAgents
+		// Enable specific install services
+		enabledServices = append(enabledServices, "start-cluster-installation.service")
+		// Version is retrieved from the embedded data
+		openshiftVersion, err = version.Version()
+		if err != nil {
+			return err
+		}
+		streamGetter = DefaultCoreOSStreamGetter
+
+	case workflow.AgentWorkflowTypeAddNodes:
+		// In the add-nodes workflow, every node will act independently from the others.
+		a.RendezvousIP = "127.0.0.1"
+		// Reuse the existing cluster name.
+		clusterName = clusterInfo.ClusterName
+		// Fetch the required number of master and worker nodes. Currently only adding workers
+		// is supported, so forcing the expected number of masters to zero, and assuming implcitly
+		// that all the hosts defined are workers.
+		numMasters = 0
+		numWorkers = len(addNodesConfig.Config.Hosts)
+
+		// Enable add-nodes specific services
+		enabledServices = append(enabledServices, "agent-add-node.service")
+		// Generate add-nodes.env file
+		addNodesEnvFile := ignition.FileFromString(addNodesEnvPath, "root", 0644, getAddNodesEnv(*clusterInfo, authConfig.AgentAuthTokenExpiry))
+		config.Storage.Files = append(config.Storage.Files, addNodesEnvFile)
+
+		// Enable auth token service
+		enabledServices = append(enabledServices, "agent-auth-token-status.service")
+
+		// Version matches the source cluster one
+		openshiftVersion = clusterInfo.Version
+		streamGetter = func(ctx context.Context) (*stream.Stream, error) {
+			return clusterInfo.OSImage, nil
+		}
+		// If defined, add the ignition endpoints
+		if err := addDay2IgnitionEndpoints(&config, *clusterInfo); err != nil {
+			return err
+		}
+
+	default:
+		return fmt.Errorf("AgentWorkflowType value not supported: %s", agentWorkflow.Workflow)
 	}
 
-	logrus.Infof("The rendezvous host IP (node0 IP) is %s", nodeZeroIP)
-
-	a.RendezvousIP = nodeZeroIP
 	// Default to x86_64
 	archName := arch.RpmArch(types.ArchitectureAMD64)
 	if infraEnv.Spec.CpuArchitecture != "" {
 		archName = infraEnv.Spec.CpuArchitecture
 	}
-
-	releaseImageList, err := releaseImageList(agentManifests.ClusterImageSet.Spec.ReleaseImage, archName)
+	// Examine the release payload to see if its multi
+	releaseArch, err := agentcommon.DetermineReleaseImageArch(agentManifests.GetPullSecretData(), agentManifests.ClusterImageSet.Spec.ReleaseImage)
+	if err != nil {
+		logrus.Warnf("Unable to validate the release image architecture, using infraEnv.Spec.CpuArchitecture for the release image arch")
+		releaseArch = archName
+	} else {
+		releaseArch = arch.RpmArch(releaseArch)
+		logrus.Debugf("Found Release Image Architecture: %s", releaseArch)
+	}
+	releaseArchs := []string{releaseArch}
+	if releaseArch == "multi" {
+		releaseArchs = []string{arch.RpmArch(types.ArchitectureARM64), arch.RpmArch(types.ArchitectureAMD64), arch.RpmArch(types.ArchitecturePPC64LE), arch.RpmArch(types.ArchitectureS390X)}
+	}
+	releaseImageList, err := releaseImageListWithVersion(agentManifests.ClusterImageSet.Spec.ReleaseImage, releaseArch, releaseArchs, openshiftVersion)
 	if err != nil {
 		return err
 	}
@@ -145,59 +242,51 @@ func (a *Ignition) Generate(dependencies asset.Parents) error {
 
 	publicContainerRegistries := getPublicContainerRegistries(registriesConfig)
 
-	releaseImageMirror := getMirrorFromRelease(agentManifests.ClusterImageSet.Spec.ReleaseImage, registriesConfig)
+	releaseImageMirror := mirror.GetMirrorFromRelease(agentManifests.ClusterImageSet.Spec.ReleaseImage, registriesConfig)
 
-	infraEnvID := uuid.New().String()
+	infraEnvID := infraEnvAsset.ID
 	logrus.Debug("Generated random infra-env id ", infraEnvID)
 
-	osImage, err := getOSImagesInfo(archName)
+	osImage, err := getOSImagesInfo(archName, openshiftVersion, streamGetter)
 	if err != nil {
 		return err
 	}
 	a.CPUArch = *osImage.CPUArchitecture
 
-	clusterName := fmt.Sprintf("%s.%s",
-		agentManifests.ClusterDeployment.Spec.ClusterName,
-		agentManifests.ClusterDeployment.Spec.BaseDomain)
-
+	caBundleMount := defineCABundleMount(registriesConfig, registryCABundle)
 	agentTemplateData := getTemplateData(
 		clusterName,
 		agentManifests.GetPullSecretData(),
-		nodeZeroIP,
 		releaseImageList,
 		agentManifests.ClusterImageSet.Spec.ReleaseImage,
 		releaseImageMirror,
-		len(registriesConfig.MirrorConfig) > 0,
 		publicContainerRegistries,
-		agentManifests.AgentClusterInstall,
+		imageTypeISO,
 		infraEnvID,
+		authConfig.PublicKey,
+		authConfig.AuthType,
+		authConfig.AgentAuthToken,
+		authConfig.AgentAuthTokenExpiry,
+		caBundleMount,
+		len(registriesConfig.MirrorConfig) > 0,
+		numMasters, numWorkers,
 		osImage,
-		infraEnv.Spec.Proxy)
+		infraEnv.Spec.Proxy,
+	)
 
 	err = bootstrap.AddStorageFiles(&config, "/", "agent/files", agentTemplateData)
 	if err != nil {
 		return err
 	}
 
-	// Set up bootstrap service recording
-	if err := bootstrap.AddStorageFiles(&config,
-		"/usr/local/bin/bootstrap-service-record.sh",
-		"bootstrap/files/usr/local/bin/bootstrap-service-record.sh",
-		nil); err != nil {
-		return err
-	}
+	rendezvousHostFile := ignition.FileFromString(rendezvousHostEnvPath,
+		"root", 0644,
+		getRendezvousHostEnv(agentTemplateData.ServiceProtocol, a.RendezvousIP, authConfig.AgentAuthToken, agentWorkflow.Workflow))
+	config.Storage.Files = append(config.Storage.Files, rendezvousHostFile)
 
-	// Use bootstrap script to get container images
-	relImgData := struct{ ReleaseImage string }{
-		ReleaseImage: agentManifests.ClusterImageSet.Spec.ReleaseImage,
-	}
-	for _, script := range []string{"release-image.sh", "release-image-download.sh"} {
-		if err := bootstrap.AddStorageFiles(&config,
-			"/usr/local/bin/"+script,
-			"bootstrap/files/usr/local/bin/"+script+".template",
-			relImgData); err != nil {
-			return err
-		}
+	err = addBootstrapScripts(&config, agentManifests.ClusterImageSet.Spec.ReleaseImage)
+	if err != nil {
+		return err
 	}
 
 	// add ZTP manifests to manifestPath
@@ -214,34 +303,19 @@ func (a *Ignition) Generate(dependencies asset.Parents) error {
 		config.Storage.Files = append(config.Storage.Files, agentConfigFile)
 	}
 
-	addMacAddressToHostnameMappings(&config, agentConfigAsset)
+	addMacAddressToHostnameMappings(&config, agentHostsAsset)
 
 	err = addStaticNetworkConfig(&config, agentManifests.StaticNetworkConfigs)
 	if err != nil {
 		return err
 	}
 
-	agentEnabledServices := []string{
-		"agent.service",
-		"agent-tui.path",
-		"assisted-service-db.service",
-		"assisted-service-pod.service",
-		"assisted-service.service",
-		"create-cluster-and-infraenv.service",
-		"node-zero.service",
-		"multipathd.service",
-		"selinux.service",
-		"set-hostname.service",
-		"start-cluster-installation.service",
-		"install-status.service",
-	}
-
 	// Enable pre-network-manager-config.service only when there are network configs defined
 	if len(agentManifests.StaticNetworkConfigs) != 0 {
-		agentEnabledServices = append(agentEnabledServices, "pre-network-manager-config.service")
+		enabledServices = append(enabledServices, "pre-network-manager-config.service")
 	}
 
-	err = bootstrap.AddSystemdUnits(&config, "agent/systemd/units", agentTemplateData, agentEnabledServices)
+	err = bootstrap.AddSystemdUnits(&config, "agent/systemd/units", agentTemplateData, enabledServices)
 	if err != nil {
 		return err
 	}
@@ -250,7 +324,10 @@ func (a *Ignition) Generate(dependencies asset.Parents) error {
 
 	addMirrorData(&config, registriesConfig, registryCABundle)
 
-	addHostConfig(&config, agentConfigAsset)
+	err = addHostConfig(&config, agentHostsAsset)
+	if err != nil {
+		return err
+	}
 
 	err = addExtraManifests(&config, extraManifests)
 	if err != nil {
@@ -261,27 +338,60 @@ func (a *Ignition) Generate(dependencies asset.Parents) error {
 	return nil
 }
 
-func getTemplateData(name, pullSecret, nodeZeroIP, releaseImageList, releaseImage,
-	releaseImageMirror string, haveMirrorConfig bool, publicContainerRegistries string,
-	agentClusterInstall *hiveext.AgentClusterInstall,
-	infraEnvID string,
-	osImage *models.OsImage,
-	proxy *v1beta1.Proxy) *agentTemplateData {
-	serviceBaseURL := url.URL{
-		Scheme: "http",
-		Host:   net.JoinHostPort(nodeZeroIP, "8090"),
-		Path:   "/",
+func getDefaultEnabledServices() []string {
+	return []string{
+		"agent-interactive-console.service",
+		"agent-interactive-console-serial@.service",
+		"agent-register-cluster.service",
+		"agent-import-cluster.service",
+		"agent-register-infraenv.service",
+		"agent.service",
+		"assisted-service-db.service",
+		"assisted-service-pod.service",
+		"assisted-service.service",
+		"node-zero.service",
+		"multipathd.service",
+		"selinux.service",
+		"install-status.service",
+		"set-hostname.service",
+	}
+}
+
+func addBootstrapScripts(config *igntypes.Config, releaseImage string) (err error) {
+	// Set up bootstrap service recording
+	if err := bootstrap.AddStorageFiles(config,
+		"/usr/local/bin/bootstrap-service-record.sh",
+		"bootstrap/files/usr/local/bin/bootstrap-service-record.sh",
+		nil); err != nil {
+		return err
 	}
 
+	// Use bootstrap script to get container images
+	relImgData := struct{ ReleaseImage string }{
+		ReleaseImage: releaseImage,
+	}
+	for _, script := range []string{"release-image.sh", "release-image-download.sh"} {
+		if err := bootstrap.AddStorageFiles(config,
+			"/usr/local/bin/"+script,
+			"bootstrap/files/usr/local/bin/"+script+".template",
+			relImgData); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func getTemplateData(name, pullSecret, releaseImageList, releaseImage, releaseImageMirror, publicContainerRegistries,
+	imageTypeISO, infraEnvID, publicKey, authType, token, tokenExpiry, caBundleMount string,
+	haveMirrorConfig bool,
+	numMasters, numWorkers int,
+	osImage *models.OsImage,
+	proxy *v1beta1.Proxy) *agentTemplateData {
 	return &agentTemplateData{
-		ServiceProtocol:           serviceBaseURL.Scheme,
-		ServiceBaseURL:            serviceBaseURL.String(),
+		ServiceProtocol:           "http",
 		PullSecret:                pullSecret,
-		NodeZeroIP:                serviceBaseURL.Hostname(),
-		AssistedServiceHost:       serviceBaseURL.Host,
-		APIVIP:                    agentClusterInstall.Spec.APIVIP,
-		ControlPlaneAgents:        agentClusterInstall.Spec.ProvisionRequirements.ControlPlaneAgents,
-		WorkerAgents:              agentClusterInstall.Spec.ProvisionRequirements.WorkerAgents,
+		ControlPlaneAgents:        numMasters,
+		WorkerAgents:              numWorkers,
 		ReleaseImages:             releaseImageList,
 		ReleaseImage:              releaseImage,
 		ReleaseImageMirror:        releaseImageMirror,
@@ -291,7 +401,51 @@ func getTemplateData(name, pullSecret, nodeZeroIP, releaseImageList, releaseImag
 		ClusterName:               name,
 		OSImage:                   osImage,
 		Proxy:                     proxy,
+		ImageTypeISO:              imageTypeISO,
+		PublicKeyPEM:              publicKey,
+		AuthType:                  authType,
+		Token:                     token,
+		TokenExpiry:               tokenExpiry,
+		CaBundleMount:             caBundleMount,
 	}
+}
+
+func getRendezvousHostEnv(serviceProtocol, nodeZeroIP, token string, workflowType workflow.AgentWorkflowType) string {
+	serviceBaseURL := url.URL{
+		Scheme: serviceProtocol,
+		Host:   net.JoinHostPort(nodeZeroIP, "8090"),
+		Path:   "/",
+	}
+	imageServiceBaseURL := url.URL{
+		Scheme: serviceProtocol,
+		Host:   net.JoinHostPort(nodeZeroIP, "8888"),
+		Path:   "/",
+	}
+	// AGENT_AUTH_TOKEN is required to authenticate API requests against agent-installer-local auth type.
+	// PULL_SECRET_TOKEN contains the same value as AGENT_AUTH_TOKEN. The name PULL_SECRET_TOKEN is used in
+	// assisted-installer-agent, which is responsible for authenticating API requests related to agents.
+	// Historically, PULL_SECRET_TOKEN was used solely to store the pull secrets.
+	// However, as the authentication mechanisms have evolved, PULL_SECRET_TOKEN now
+	// stores a JWT (JSON Web Token) in the context of local authentication.
+	// Consequently, PULL_SECRET_TOKEN must be set with the value of AGENT_AUTH_TOKEN to maintain compatibility
+	// and ensure successful authentication.
+	// In the absence of PULL_SECRET_TOKEN, the cluster installation will wait forever.
+
+	return fmt.Sprintf(`NODE_ZERO_IP=%s
+SERVICE_BASE_URL=%s
+IMAGE_SERVICE_BASE_URL=%s
+AGENT_AUTH_TOKEN=%s
+PULL_SECRET_TOKEN=%s
+WORKFLOW_TYPE=%s
+`, nodeZeroIP, serviceBaseURL.String(), imageServiceBaseURL.String(), token, token, workflowType)
+}
+
+func getAddNodesEnv(clusterInfo joiner.ClusterInfo, authTokenExpiry string) string {
+	return fmt.Sprintf(`CLUSTER_ID=%s
+CLUSTER_NAME=%s
+CLUSTER_API_VIP_DNS_NAME=%s
+AGENT_AUTH_TOKEN_EXPIRY=%s
+`, clusterInfo.ClusterID, clusterInfo.ClusterName, clusterInfo.APIDNSName, authTokenExpiry)
 }
 
 func addStaticNetworkConfig(config *igntypes.Config, staticNetworkConfig []*models.HostStaticNetworkConfig) (err error) {
@@ -339,24 +493,36 @@ func addTLSData(config *igntypes.Config, dependencies asset.Parents) {
 	dependencies.Get(pwd)
 	config.Storage.Files = append(config.Storage.Files,
 		ignition.FileFromBytes("/opt/agent/tls/kubeadmin-password.hash", "root", 0600, pwd.PasswordHash))
-
 }
 
 func addMirrorData(config *igntypes.Config, registriesConfig *mirror.RegistriesConf, registryCABundle *mirror.CaBundle) {
 
 	// This is required for assisted-service to build the ICSP for openshift-install
 	if registriesConfig.File != nil {
-		registriesFile := ignition.FileFromBytes("/etc/containers/registries.conf",
-			"root", 0600, registriesConfig.File.Data)
+		registriesFile := ignition.FileFromBytes(registriesConfPath,
+			"root", 0644, registriesConfig.File.Data)
 		config.Storage.Files = append(config.Storage.Files, registriesFile)
 	}
 
 	// This is required for the agent to run the podman commands to the mirror
 	if registryCABundle.File != nil && len(registryCABundle.File.Data) > 0 {
-		caFile := ignition.FileFromBytes("/etc/pki/ca-trust/source/anchors/domain.crt",
+		caFile := ignition.FileFromBytes(registryCABundlePath,
 			"root", 0600, registryCABundle.File.Data)
 		config.Storage.Files = append(config.Storage.Files, caFile)
 	}
+}
+
+func defineCABundleMount(registriesConfig *mirror.RegistriesConf, registryCABundle *mirror.CaBundle) string {
+	// By default, the current host CA bundle is used (it will also contain eventually a user CA bundle, if
+	// defined in the AdditionalTrustBundle field of install-config.yaml).
+	hostSourceCABundle := "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
+
+	// If mirror registry is configured and the user provided a bundle, then let's mount just the user one.
+	if len(registriesConfig.MirrorConfig) > 0 && registryCABundle.File != nil && len(registryCABundle.File.Data) > 0 {
+		hostSourceCABundle = registryCABundlePath
+	}
+
+	return fmt.Sprintf("-v %s:/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem:z", hostSourceCABundle)
 }
 
 // Creates a file named with a host's MAC address. The desired hostname
@@ -364,11 +530,11 @@ func addMirrorData(config *igntypes.Config, registriesConfig *mirror.RegistriesC
 // sets the hostname using "hostnamectl set-hostname" when the ISO boots.
 func addMacAddressToHostnameMappings(
 	config *igntypes.Config,
-	agentConfigAsset *agentconfig.AgentConfig) {
-	if agentConfigAsset.Config == nil || len(agentConfigAsset.Config.Hosts) == 0 {
+	agentHostsAsset *agentconfig.AgentHosts) {
+	if len(agentHostsAsset.Hosts) == 0 {
 		return
 	}
-	for _, host := range agentConfigAsset.Config.Hosts {
+	for _, host := range agentHostsAsset.Hosts {
 		if host.Hostname != "" {
 			file := ignition.FileFromBytes(filepath.Join(hostnamesPath,
 				strings.ToLower(filepath.Base(host.Interfaces[0].MacAddress))),
@@ -378,8 +544,8 @@ func addMacAddressToHostnameMappings(
 	}
 }
 
-func addHostConfig(config *igntypes.Config, agentConfig *agentconfig.AgentConfig) error {
-	confs, err := agentConfig.HostConfigFiles()
+func addHostConfig(config *igntypes.Config, agentHosts *agentconfig.AgentHosts) error {
+	confs, err := agentHosts.HostConfigFiles()
 	if err != nil {
 		return err
 	}
@@ -388,6 +554,35 @@ func addHostConfig(config *igntypes.Config, agentConfig *agentconfig.AgentConfig
 		hostConfigFile := ignition.FileFromBytes(filepath.Join("/etc/assisted/hostconfig", path), "root", 0644, content)
 		config.Storage.Files = append(config.Storage.Files, hostConfigFile)
 	}
+	return nil
+}
+
+func addDay2IgnitionEndpoints(config *igntypes.Config, clusterInfo joiner.ClusterInfo) error {
+	if clusterInfo.IgnitionEndpointWorker == nil {
+		return nil
+	}
+
+	user := "root"
+	mode := 0644
+	config.Storage.Directories = append(config.Storage.Directories, igntypes.Directory{
+		Node: igntypes.Node{
+			Path: clusterConfigPath,
+			User: igntypes.NodeUser{
+				Name: &user,
+			},
+			Overwrite: util.BoolToPtr(true),
+		},
+		DirectoryEmbedded1: igntypes.DirectoryEmbedded1{
+			Mode: &mode,
+		},
+	})
+
+	workerIgnitionBytes, err := json.Marshal(clusterInfo.IgnitionEndpointWorker)
+	if err != nil {
+		return err
+	}
+	workerIgnitionFile := ignition.FileFromBytes(path.Join(clusterConfigPath, "worker-ignition-endpoint.json"), user, mode, workerIgnitionBytes)
+	config.Storage.Files = append(config.Storage.Files, workerIgnitionFile)
 	return nil
 }
 
@@ -438,19 +633,14 @@ func addExtraManifests(config *igntypes.Config, extraManifests *manifests.ExtraM
 	return nil
 }
 
-func getOSImagesInfo(cpuArch string) (*models.OsImage, error) {
-	st, err := rhcos.FetchCoreOSBuild(context.Background())
+func getOSImagesInfo(cpuArch string, openshiftVersion string, streamGetter CoreOSBuildFetcher) (*models.OsImage, error) {
+	st, err := streamGetter(context.Background())
 	if err != nil {
 		return nil, err
 	}
 
 	osImage := &models.OsImage{
 		CPUArchitecture: &cpuArch,
-	}
-
-	openshiftVersion, err := version.Version()
-	if err != nil {
-		return nil, err
 	}
 	osImage.OpenshiftVersion = &openshiftVersion
 
@@ -475,7 +665,7 @@ func getOSImagesInfo(cpuArch string) (*models.OsImage, error) {
 }
 
 // RetrieveRendezvousIP Returns the Rendezvous IP from either AgentConfig or NMStateConfig
-func RetrieveRendezvousIP(agentConfig *agent.Config, nmStateConfigs []*v1beta1.NMStateConfig) (string, error) {
+func RetrieveRendezvousIP(agentConfig *agent.Config, hosts []agent.Host, nmStateConfigs []*v1beta1.NMStateConfig) (string, error) {
 	var err error
 	var rendezvousIP string
 
@@ -483,30 +673,21 @@ func RetrieveRendezvousIP(agentConfig *agent.Config, nmStateConfigs []*v1beta1.N
 		rendezvousIP = agentConfig.RendezvousIP
 		logrus.Debug("RendezvousIP from the AgentConfig ", rendezvousIP)
 
-	} else if len(nmStateConfigs) > 0 {
-		rendezvousIP, err = manifests.GetNodeZeroIP(nmStateConfigs)
-		logrus.Debug("RendezvousIP from the NMStateConfig ", rendezvousIP)
 	} else {
-		err = errors.New("missing rendezvousIP in agent-config or at least one NMStateConfig manifest")
-	}
-	return rendezvousIP, err
-}
-
-func getMirrorFromRelease(releaseImage string, registriesConfig *mirror.RegistriesConf) string {
-	source := regexp.MustCompile(`^(.+?)(@sha256)?:(.+)`).FindStringSubmatch(releaseImage)
-	for _, config := range registriesConfig.MirrorConfig {
-		if config.Location == source[1] {
-			// include the tag with the build release image
-			if len(source) == 4 {
-				// Has Sha256
-				return fmt.Sprintf("%s%s:%s", config.Mirror, source[2], source[3])
-			} else if len(source) == 3 {
-				return fmt.Sprintf("%s:%s", config.Mirror, source[2])
-			}
+		rendezvousIP, err = manifests.GetNodeZeroIP(hosts, nmStateConfigs)
+		if err != nil {
+			return "", errors.Wrap(err, "missing rendezvousIP in agent-config, at least one host networkConfig, or at least one NMStateConfig manifest")
 		}
+		logrus.Debug("RendezvousIP from the NMStateConfig ", rendezvousIP)
 	}
 
-	return ""
+	// Convert IPv6 address to canonical to match host format for comparisons
+	addr := net.ParseIP(rendezvousIP)
+	if addr == nil {
+		err = errors.New(fmt.Sprintf("invalid rendezvous IP: %s", rendezvousIP))
+		return "", err
+	}
+	return addr.String(), err
 }
 
 func getPublicContainerRegistries(registriesConfig *mirror.RegistriesConf) string {

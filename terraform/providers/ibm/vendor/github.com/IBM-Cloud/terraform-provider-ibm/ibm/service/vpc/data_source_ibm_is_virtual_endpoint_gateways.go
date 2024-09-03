@@ -5,6 +5,7 @@ package vpc
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/flex"
@@ -22,6 +23,16 @@ func DataSourceIBMISEndpointGateways() *schema.Resource {
 		Read:     dataSourceIBMISEndpointGatewaysRead,
 		Importer: &schema.ResourceImporter{},
 		Schema: map[string]*schema.Schema{
+			"resource_group": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "The unique identifier of the resource group this endpoint gateway belongs to",
+			},
+			"name": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "The name of the endpoint gateway group",
+			},
 			isVirtualEndpointGateways: {
 				Type:     schema.TypeList,
 				Computed: true,
@@ -36,6 +47,11 @@ func DataSourceIBMISEndpointGateways() *schema.Resource {
 							Type:        schema.TypeString,
 							Computed:    true,
 							Description: "Endpoint gateway name",
+						},
+						isVirtualEndpointGatewayAllowDnsResolutionBinding: {
+							Type:        schema.TypeBool,
+							Computed:    true,
+							Description: "Indicates whether to allow this endpoint gateway to participate in DNS resolution bindings with a VPC that has dns.enable_hub set to true.",
 						},
 						isVirtualEndpointGatewayResourceType: {
 							Type:        schema.TypeString,
@@ -61,6 +77,14 @@ func DataSourceIBMISEndpointGateways() *schema.Resource {
 							Type:        schema.TypeString,
 							Computed:    true,
 							Description: "Endpoint gateway health state",
+						},
+						isVirtualEndpointGatewayServiceEndpoints: {
+							Type:     schema.TypeList,
+							Computed: true,
+							Elem: &schema.Schema{
+								Type: schema.TypeString,
+							},
+							Description: "The fully qualified domain names for the target service. A fully qualified domain name for the target service",
 						},
 						isVirtualEndpointGatewayLifecycleState: {
 							Type:        schema.TypeString,
@@ -127,6 +151,20 @@ func DataSourceIBMISEndpointGateways() *schema.Resource {
 							Computed:    true,
 							Description: "The VPC id",
 						},
+						isVirtualEndpointGatewayTags: {
+							Type:        schema.TypeSet,
+							Computed:    true,
+							Elem:        &schema.Schema{Type: schema.TypeString},
+							Set:         flex.ResourceIBMVPCHash,
+							Description: "List of tags for VPE",
+						},
+						isVirtualEndpointGatewayAccessTags: {
+							Type:        schema.TypeSet,
+							Computed:    true,
+							Elem:        &schema.Schema{Type: schema.TypeString},
+							Set:         flex.ResourceIBMVPCHash,
+							Description: "List of access management tags",
+						},
 					},
 				},
 			},
@@ -142,8 +180,17 @@ func dataSourceIBMISEndpointGatewaysRead(d *schema.ResourceData, meta interface{
 
 	start := ""
 	allrecs := []vpcv1.EndpointGateway{}
+	options := sess.NewListEndpointGatewaysOptions()
+	if resgroupintf, ok := d.GetOk("resource_group"); ok {
+		resGroup := resgroupintf.(string)
+		options.ResourceGroupID = &resGroup
+	}
+	if nameintf, ok := d.GetOk("name"); ok {
+		name := nameintf.(string)
+		options.Name = &name
+	}
 	for {
-		options := sess.NewListEndpointGatewaysOptions()
+
 		if start != "" {
 			options.Start = &start
 		}
@@ -169,14 +216,30 @@ func dataSourceIBMISEndpointGatewaysRead(d *schema.ResourceData, meta interface{
 		endpointGatewayOutput[isVirtualEndpointGatewayResourceGroupID] = *endpointGateway.ResourceGroup.ID
 		endpointGatewayOutput[isVirtualEndpointGatewayCRN] = *endpointGateway.CRN
 		endpointGatewayOutput[isVirtualEndpointGatewayVpcID] = *endpointGateway.VPC.ID
+		endpointGatewayOutput[isVirtualEndpointGatewayAllowDnsResolutionBinding] = endpointGateway.AllowDnsResolutionBinding
 		endpointGatewayOutput[isVirtualEndpointGatewayTarget] =
 			flattenEndpointGatewayTarget(endpointGateway.Target.(*vpcv1.EndpointGatewayTarget))
-		endpointGatewayOutput[isVirtualEndpointGatewayIPs] =
-			flattenDataSourceIPs(endpointGateway.Ips)
 		if endpointGateway.SecurityGroups != nil {
 			endpointGatewayOutput[isVirtualEndpointGatewaySecurityGroups] =
 				flattenDataSourceSecurityGroups(endpointGateway.SecurityGroups)
 		}
+		if len(endpointGateway.ServiceEndpoints) > 0 {
+			endpointGatewayOutput[isVirtualEndpointGatewayServiceEndpoints] = endpointGateway.ServiceEndpoints
+		}
+		endpointGatewayOutput[isVirtualEndpointGatewayIPs] =
+			flattenDataSourceIPs(endpointGateway.Ips)
+		tags, err := flex.GetGlobalTagsUsingCRN(meta, *endpointGateway.CRN, "", isUserTagType)
+		if err != nil {
+			log.Printf(
+				"Error on get of VPE (%s) tags: %s", d.Id(), err)
+		}
+		endpointGatewayOutput[isVirtualEndpointGatewayTags] = tags
+		accesstags, err := flex.GetGlobalTagsUsingCRN(meta, *endpointGateway.CRN, "", isAccessTagType)
+		if err != nil {
+			log.Printf(
+				"Error on get of VPE (%s) access tags: %s", d.Id(), err)
+		}
+		endpointGatewayOutput[isVirtualEndpointGatewayAccessTags] = accesstags
 		endpointGateways = append(endpointGateways, endpointGatewayOutput)
 	}
 	d.SetId(dataSourceIBMISEndpointGatewaysCheckID(d))

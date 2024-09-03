@@ -1,5 +1,5 @@
 /**
- * (C) Copyright IBM Corp. 2022.
+ * (C) Copyright IBM Corp. 2023.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
  */
 
 /*
- * IBM OpenAPI SDK Code Generator Version: 3.45.1-632ec580-20220210-190638
+ * IBM OpenAPI SDK Code Generator Version: 3.82.1-2082d402-20231115-195014
  */
 
 // Package clouddatabasesv5 : Operations and models for the CloudDatabasesV5 service
@@ -416,27 +416,27 @@ func (cloudDatabases *CloudDatabasesV5) CreateDatabaseUserWithContext(ctx contex
 	return
 }
 
-// ChangeUserPassword : Set specified user's password
-// Sets the password of a specified user.
-func (cloudDatabases *CloudDatabasesV5) ChangeUserPassword(changeUserPasswordOptions *ChangeUserPasswordOptions) (result *ChangeUserPasswordResponse, response *core.DetailedResponse, err error) {
-	return cloudDatabases.ChangeUserPasswordWithContext(context.Background(), changeUserPasswordOptions)
+// UpdateUser : Update a user's password or role
+// Sets the password or role of a specified user. Updating roles is only supported for Redis 6.0 or greater.
+func (cloudDatabases *CloudDatabasesV5) UpdateUser(updateUserOptions *UpdateUserOptions) (result *UpdateUserResponse, response *core.DetailedResponse, err error) {
+	return cloudDatabases.UpdateUserWithContext(context.Background(), updateUserOptions)
 }
 
-// ChangeUserPasswordWithContext is an alternate form of the ChangeUserPassword method which supports a Context parameter
-func (cloudDatabases *CloudDatabasesV5) ChangeUserPasswordWithContext(ctx context.Context, changeUserPasswordOptions *ChangeUserPasswordOptions) (result *ChangeUserPasswordResponse, response *core.DetailedResponse, err error) {
-	err = core.ValidateNotNil(changeUserPasswordOptions, "changeUserPasswordOptions cannot be nil")
+// UpdateUserWithContext is an alternate form of the UpdateUser method which supports a Context parameter
+func (cloudDatabases *CloudDatabasesV5) UpdateUserWithContext(ctx context.Context, updateUserOptions *UpdateUserOptions) (result *UpdateUserResponse, response *core.DetailedResponse, err error) {
+	err = core.ValidateNotNil(updateUserOptions, "updateUserOptions cannot be nil")
 	if err != nil {
 		return
 	}
-	err = core.ValidateStruct(changeUserPasswordOptions, "changeUserPasswordOptions")
+	err = core.ValidateStruct(updateUserOptions, "updateUserOptions")
 	if err != nil {
 		return
 	}
 
 	pathParamsMap := map[string]string{
-		"id":        *changeUserPasswordOptions.ID,
-		"user_type": *changeUserPasswordOptions.UserType,
-		"username":  *changeUserPasswordOptions.Username,
+		"id":        *updateUserOptions.ID,
+		"user_type": *updateUserOptions.UserType,
+		"username":  *updateUserOptions.Username,
 	}
 
 	builder := core.NewRequestBuilder(core.PATCH)
@@ -447,11 +447,11 @@ func (cloudDatabases *CloudDatabasesV5) ChangeUserPasswordWithContext(ctx contex
 		return
 	}
 
-	for headerName, headerValue := range changeUserPasswordOptions.Headers {
+	for headerName, headerValue := range updateUserOptions.Headers {
 		builder.AddHeader(headerName, headerValue)
 	}
 
-	sdkHeaders := common.GetSdkHeaders("cloud_databases", "V5", "ChangeUserPassword")
+	sdkHeaders := common.GetSdkHeaders("cloud_databases", "V5", "UpdateUser")
 	for headerName, headerValue := range sdkHeaders {
 		builder.AddHeader(headerName, headerValue)
 	}
@@ -459,8 +459,8 @@ func (cloudDatabases *CloudDatabasesV5) ChangeUserPasswordWithContext(ctx contex
 	builder.AddHeader("Content-Type", "application/json")
 
 	body := make(map[string]interface{})
-	if changeUserPasswordOptions.User != nil {
-		body["user"] = changeUserPasswordOptions.User
+	if updateUserOptions.User != nil {
+		body["user"] = updateUserOptions.User
 	}
 	_, err = builder.SetBodyContentJSON(body)
 	if err != nil {
@@ -478,7 +478,7 @@ func (cloudDatabases *CloudDatabasesV5) ChangeUserPasswordWithContext(ctx contex
 		return
 	}
 	if rawResponse != nil {
-		err = core.UnmarshalModel(rawResponse, "", &result, UnmarshalChangeUserPasswordResponse)
+		err = core.UnmarshalModel(rawResponse, "", &result, UnmarshalUpdateUserResponse)
 		if err != nil {
 			return
 		}
@@ -551,7 +551,7 @@ func (cloudDatabases *CloudDatabasesV5) DeleteDatabaseUserWithContext(ctx contex
 }
 
 // UpdateDatabaseConfiguration : Change your database configuration
-// Change your database configuration. Available for PostgreSQL, EnterpriseDB, MySQL, and Redis ONLY.
+// Change your database configuration. Available for PostgreSQL, EnterpriseDB, MySQL, RabbitMQ and Redis ONLY.
 func (cloudDatabases *CloudDatabasesV5) UpdateDatabaseConfiguration(updateDatabaseConfigurationOptions *UpdateDatabaseConfigurationOptions) (result *UpdateDatabaseConfigurationResponse, response *core.DetailedResponse, err error) {
 	return cloudDatabases.UpdateDatabaseConfigurationWithContext(context.Background(), updateDatabaseConfigurationOptions)
 }
@@ -1708,6 +1708,137 @@ func (cloudDatabases *CloudDatabasesV5) KillConnectionsWithContext(ctx context.C
 	return
 }
 
+// CreateLogicalReplicationSlot : Create a new logical replication slot
+// Creates a new logical replication slot on the specified database. For use with PostgreSQL and wal2json only.
+func (cloudDatabases *CloudDatabasesV5) CreateLogicalReplicationSlot(createLogicalReplicationSlotOptions *CreateLogicalReplicationSlotOptions) (result *CreateLogicalReplicationSlotResponse, response *core.DetailedResponse, err error) {
+	return cloudDatabases.CreateLogicalReplicationSlotWithContext(context.Background(), createLogicalReplicationSlotOptions)
+}
+
+// CreateLogicalReplicationSlotWithContext is an alternate form of the CreateLogicalReplicationSlot method which supports a Context parameter
+func (cloudDatabases *CloudDatabasesV5) CreateLogicalReplicationSlotWithContext(ctx context.Context, createLogicalReplicationSlotOptions *CreateLogicalReplicationSlotOptions) (result *CreateLogicalReplicationSlotResponse, response *core.DetailedResponse, err error) {
+	err = core.ValidateNotNil(createLogicalReplicationSlotOptions, "createLogicalReplicationSlotOptions cannot be nil")
+	if err != nil {
+		return
+	}
+	err = core.ValidateStruct(createLogicalReplicationSlotOptions, "createLogicalReplicationSlotOptions")
+	if err != nil {
+		return
+	}
+
+	pathParamsMap := map[string]string{
+		"id": *createLogicalReplicationSlotOptions.ID,
+	}
+
+	builder := core.NewRequestBuilder(core.POST)
+	builder = builder.WithContext(ctx)
+	builder.EnableGzipCompression = cloudDatabases.GetEnableGzipCompression()
+	_, err = builder.ResolveRequestURL(cloudDatabases.Service.Options.URL, `/deployments/{id}/postgresql/logical_replication_slots`, pathParamsMap)
+	if err != nil {
+		return
+	}
+
+	for headerName, headerValue := range createLogicalReplicationSlotOptions.Headers {
+		builder.AddHeader(headerName, headerValue)
+	}
+
+	sdkHeaders := common.GetSdkHeaders("cloud_databases", "V5", "CreateLogicalReplicationSlot")
+	for headerName, headerValue := range sdkHeaders {
+		builder.AddHeader(headerName, headerValue)
+	}
+	builder.AddHeader("Accept", "application/json")
+	builder.AddHeader("Content-Type", "application/json")
+
+	body := make(map[string]interface{})
+	if createLogicalReplicationSlotOptions.LogicalReplicationSlot != nil {
+		body["logical_replication_slot"] = createLogicalReplicationSlotOptions.LogicalReplicationSlot
+	}
+	_, err = builder.SetBodyContentJSON(body)
+	if err != nil {
+		return
+	}
+
+	request, err := builder.Build()
+	if err != nil {
+		return
+	}
+
+	var rawResponse map[string]json.RawMessage
+	response, err = cloudDatabases.Service.Request(request, &rawResponse)
+	if err != nil {
+		return
+	}
+	if rawResponse != nil {
+		err = core.UnmarshalModel(rawResponse, "", &result, UnmarshalCreateLogicalReplicationSlotResponse)
+		if err != nil {
+			return
+		}
+		response.Result = result
+	}
+
+	return
+}
+
+// DeleteLogicalReplicationSlot : Delete a logical replication slot
+// Deletes a logical replication slot from a database. For use with PostgreSQL, EnterpriseDB, and wal2json only.
+func (cloudDatabases *CloudDatabasesV5) DeleteLogicalReplicationSlot(deleteLogicalReplicationSlotOptions *DeleteLogicalReplicationSlotOptions) (result *DeleteLogicalReplicationSlotResponse, response *core.DetailedResponse, err error) {
+	return cloudDatabases.DeleteLogicalReplicationSlotWithContext(context.Background(), deleteLogicalReplicationSlotOptions)
+}
+
+// DeleteLogicalReplicationSlotWithContext is an alternate form of the DeleteLogicalReplicationSlot method which supports a Context parameter
+func (cloudDatabases *CloudDatabasesV5) DeleteLogicalReplicationSlotWithContext(ctx context.Context, deleteLogicalReplicationSlotOptions *DeleteLogicalReplicationSlotOptions) (result *DeleteLogicalReplicationSlotResponse, response *core.DetailedResponse, err error) {
+	err = core.ValidateNotNil(deleteLogicalReplicationSlotOptions, "deleteLogicalReplicationSlotOptions cannot be nil")
+	if err != nil {
+		return
+	}
+	err = core.ValidateStruct(deleteLogicalReplicationSlotOptions, "deleteLogicalReplicationSlotOptions")
+	if err != nil {
+		return
+	}
+
+	pathParamsMap := map[string]string{
+		"id":   *deleteLogicalReplicationSlotOptions.ID,
+		"name": *deleteLogicalReplicationSlotOptions.Name,
+	}
+
+	builder := core.NewRequestBuilder(core.DELETE)
+	builder = builder.WithContext(ctx)
+	builder.EnableGzipCompression = cloudDatabases.GetEnableGzipCompression()
+	_, err = builder.ResolveRequestURL(cloudDatabases.Service.Options.URL, `/deployments/{id}/postgresql/logical_replication_slots/{name}`, pathParamsMap)
+	if err != nil {
+		return
+	}
+
+	for headerName, headerValue := range deleteLogicalReplicationSlotOptions.Headers {
+		builder.AddHeader(headerName, headerValue)
+	}
+
+	sdkHeaders := common.GetSdkHeaders("cloud_databases", "V5", "DeleteLogicalReplicationSlot")
+	for headerName, headerValue := range sdkHeaders {
+		builder.AddHeader(headerName, headerValue)
+	}
+	builder.AddHeader("Accept", "application/json")
+
+	request, err := builder.Build()
+	if err != nil {
+		return
+	}
+
+	var rawResponse map[string]json.RawMessage
+	response, err = cloudDatabases.Service.Request(request, &rawResponse)
+	if err != nil {
+		return
+	}
+	if rawResponse != nil {
+		err = core.UnmarshalModel(rawResponse, "", &result, UnmarshalDeleteLogicalReplicationSlotResponse)
+		if err != nil {
+			return
+		}
+		response.Result = result
+	}
+
+	return
+}
+
 // GetAllowlist : Retrieve the allowlisted addresses and ranges for a deployment
 // Retrieve the allowlisted addresses and ranges for a deployment.
 func (cloudDatabases *CloudDatabasesV5) GetAllowlist(getAllowlistOptions *GetAllowlistOptions) (result *GetAllowlistResponse, response *core.DetailedResponse, err error) {
@@ -1974,22 +2105,6 @@ func (cloudDatabases *CloudDatabasesV5) DeleteAllowlistEntryWithContext(ctx cont
 	return
 }
 
-// APasswordSettingUser : APasswordSettingUser struct
-type APasswordSettingUser struct {
-	Password *string `json:"password,omitempty"`
-}
-
-// UnmarshalAPasswordSettingUser unmarshals an instance of APasswordSettingUser from the specified map of raw messages.
-func UnmarshalAPasswordSettingUser(m map[string]json.RawMessage, result interface{}) (err error) {
-	obj := new(APasswordSettingUser)
-	err = core.UnmarshalPrimitive(m, "password", &obj.Password)
-	if err != nil {
-		return
-	}
-	reflect.ValueOf(result).Elem().Set(reflect.ValueOf(obj))
-	return
-}
-
 // AddAllowlistEntryOptions : The AddAllowlistEntry options.
 type AddAllowlistEntryOptions struct {
 	// Deployment ID.
@@ -2068,7 +2183,7 @@ func UnmarshalAllowlistEntry(m map[string]json.RawMessage, result interface{}) (
 
 // AutoscalingCPUGroupCPU : AutoscalingCPUGroupCPU struct
 type AutoscalingCPUGroupCPU struct {
-	Scalers interface{} `json:"scalers,omitempty"`
+	Scalers map[string]interface{} `json:"scalers,omitempty"`
 
 	Rate *AutoscalingCPUGroupCPURate `json:"rate,omitempty"`
 }
@@ -2517,6 +2632,7 @@ func UnmarshalBackup(m map[string]json.RawMessage, result interface{}) (err erro
 
 // Backups : Backups struct
 type Backups struct {
+	// An array of backups.
 	Backups []Backup `json:"backups,omitempty"`
 }
 
@@ -2524,78 +2640,6 @@ type Backups struct {
 func UnmarshalBackups(m map[string]json.RawMessage, result interface{}) (err error) {
 	obj := new(Backups)
 	err = core.UnmarshalModel(m, "backups", &obj.Backups, UnmarshalBackup)
-	if err != nil {
-		return
-	}
-	reflect.ValueOf(result).Elem().Set(reflect.ValueOf(obj))
-	return
-}
-
-// ChangeUserPasswordOptions : The ChangeUserPassword options.
-type ChangeUserPasswordOptions struct {
-	// Deployment ID.
-	ID *string `json:"id" validate:"required,ne="`
-
-	// User type.
-	UserType *string `json:"user_type" validate:"required,ne="`
-
-	// User ID.
-	Username *string `json:"username" validate:"required,ne="`
-
-	User *APasswordSettingUser `json:"user,omitempty"`
-
-	// Allows users to set headers on API requests
-	Headers map[string]string
-}
-
-// NewChangeUserPasswordOptions : Instantiate ChangeUserPasswordOptions
-func (*CloudDatabasesV5) NewChangeUserPasswordOptions(id string, userType string, username string) *ChangeUserPasswordOptions {
-	return &ChangeUserPasswordOptions{
-		ID:       core.StringPtr(id),
-		UserType: core.StringPtr(userType),
-		Username: core.StringPtr(username),
-	}
-}
-
-// SetID : Allow user to set ID
-func (_options *ChangeUserPasswordOptions) SetID(id string) *ChangeUserPasswordOptions {
-	_options.ID = core.StringPtr(id)
-	return _options
-}
-
-// SetUserType : Allow user to set UserType
-func (_options *ChangeUserPasswordOptions) SetUserType(userType string) *ChangeUserPasswordOptions {
-	_options.UserType = core.StringPtr(userType)
-	return _options
-}
-
-// SetUsername : Allow user to set Username
-func (_options *ChangeUserPasswordOptions) SetUsername(username string) *ChangeUserPasswordOptions {
-	_options.Username = core.StringPtr(username)
-	return _options
-}
-
-// SetUser : Allow user to set User
-func (_options *ChangeUserPasswordOptions) SetUser(user *APasswordSettingUser) *ChangeUserPasswordOptions {
-	_options.User = user
-	return _options
-}
-
-// SetHeaders : Allow user to set Headers
-func (options *ChangeUserPasswordOptions) SetHeaders(param map[string]string) *ChangeUserPasswordOptions {
-	options.Headers = param
-	return options
-}
-
-// ChangeUserPasswordResponse : ChangeUserPasswordResponse struct
-type ChangeUserPasswordResponse struct {
-	Task *Task `json:"task,omitempty"`
-}
-
-// UnmarshalChangeUserPasswordResponse unmarshals an instance of ChangeUserPasswordResponse from the specified map of raw messages.
-func UnmarshalChangeUserPasswordResponse(m map[string]json.RawMessage, result interface{}) (err error) {
-	obj := new(ChangeUserPasswordResponse)
-	err = core.UnmarshalModel(m, "task", &obj.Task, UnmarshalTask)
 	if err != nil {
 		return
 	}
@@ -2709,13 +2753,11 @@ func UnmarshalCompleteConnectionResponse(m map[string]json.RawMessage, result in
 // Models which "extend" this model:
 // - ConfigurationPgConfiguration
 // - ConfigurationRedisConfiguration
+// - ConfigurationRabbitMqConfiguration
 // - ConfigurationMySQLConfiguration
 type Configuration struct {
-	// Maximum connections allowed.
-	MaxConnections *int64 `json:"max_connections,omitempty"`
-
-	// Max number of transactions that can be in the "prepared" state simultaneously.
-	MaxPreparedTransactions *int64 `json:"max_prepared_transactions,omitempty"`
+	// The number of seconds to wait before forces a switch to the next WAL file if a new file has not been started.
+	ArchiveTimeout *int64 `json:"archive_timeout,omitempty"`
 
 	// Deadlock timeout in ms. The time to wait on a lock before checking for deadlock.  Also the duration where lock waits
 	// will be logged.
@@ -2723,6 +2765,23 @@ type Configuration struct {
 
 	// Number of simultaneous requests that can be handled efficiently by the disk subsystem.
 	EffectiveIoConcurrency *int64 `json:"effective_io_concurrency,omitempty"`
+
+	// Causes each attempted connection to the server to be logged, as well as successful completion of client
+	// authentication.
+	LogConnections *string `json:"log_connections,omitempty"`
+
+	// Causes session terminations to be logged. The log output provides information similar to log_connections, plus the
+	// duration of the session.
+	LogDisconnections *string `json:"log_disconnections,omitempty"`
+
+	// The minimum number of milliseconds for execution time above which statements will be logged.
+	LogMinDurationStatement *int64 `json:"log_min_duration_statement,omitempty"`
+
+	// Maximum connections allowed.
+	MaxConnections *int64 `json:"max_connections,omitempty"`
+
+	// Max number of transactions that can be in the "prepared" state simultaneously.
+	MaxPreparedTransactions *int64 `json:"max_prepared_transactions,omitempty"`
 
 	// Maximum number of simultaneously defined replication slots.
 	MaxReplicationSlots *int64 `json:"max_replication_slots,omitempty"`
@@ -2738,17 +2797,21 @@ type Configuration struct {
 	// synchronous replication which will impact performance and availabilty.
 	SynchronousCommit *string `json:"synchronous_commit,omitempty"`
 
+	// The number of TCP keepalives that can be lost before the server's connection to the client is considered dead.
+	TCPKeepalivesCount *int64 `json:"tcp_keepalives_count,omitempty"`
+
+	// The number of seconds of inactivity after which TCP should send a keepalive message to the client.
+	TCPKeepalivesIdle *int64 `json:"tcp_keepalives_idle,omitempty"`
+
+	// The number of seconds after which a TCP keepalive message that is not acknowledged by the client should be
+	// retransmitted.
+	TCPKeepalivesInterval *int64 `json:"tcp_keepalives_interval,omitempty"`
+
 	// WAL level.  Set to logical to use logical decoding or logical replication.
 	WalLevel *string `json:"wal_level,omitempty"`
 
-	// The number of seconds to wait before forces a switch to the next WAL file if a new file has not been started.
-	ArchiveTimeout *int64 `json:"archive_timeout,omitempty"`
-
-	// The minimum number of milliseconds for execution time above which statements will be logged.
-	LogMinDurationStatement *int64 `json:"log_min_duration_statement,omitempty"`
-
 	// The maximum memory Redis should use, as bytes.
-	MaxmemoryRedis *int64 `json:"maxmemory-redis,omitempty"`
+	Maxmemory *int64 `json:"maxmemory,omitempty"`
 
 	// The policy with which Redis evicts keys when maximum memory is reached.
 	MaxmemoryPolicy *string `json:"maxmemory-policy,omitempty"`
@@ -2762,13 +2825,73 @@ type Configuration struct {
 	// Whether or not to stop accepting writes when background persistence actions fail.
 	StopWritesOnBgsaveError *string `json:"stop-writes-on-bgsave-error,omitempty"`
 
-	// Maximum age for a binlog in seconds. If a binlog is older, it's archived.
-	MysqlMaxBinlogAgeSec *int64 `json:"mysql_max_binlog_age_sec,omitempty"`
+	// Automatically delete undefined queues.
+	DeleteUndefinedQueues *bool `json:"delete_undefined_queues,omitempty"`
 
 	// Determines which authentication plugin the server assigns to new accounts created by CREATE USER and GRANT
 	// statements that do not explicitly specify an authentication plugin.
-	MysqlDefaultAuthenticationPlugin *string `json:"mysql_default_authentication_plugin,omitempty"`
+	DefaultAuthenticationPlugin *string `json:"default_authentication_plugin,omitempty"`
+
+	// Percentage of memory to use for innodb_buffer_pool_size.
+	InnodbBufferPoolSizePercentage *int64 `json:"innodb_buffer_pool_size_percentage,omitempty"`
+
+	// Controls the balance between strict ACID compliance for commit operations and higher performance. See official MySQL
+	// documentation for more details.
+	InnodbFlushLogAtTrxCommit *int64 `json:"innodb_flush_log_at_trx_commit,omitempty"`
+
+	// InnoDB log buffer size in bytes.
+	InnodbLogBufferSize *int64 `json:"innodb_log_buffer_size,omitempty"`
+
+	// InnoDB log file size in bytes.
+	InnodbLogFileSize *int64 `json:"innodb_log_file_size,omitempty"`
+
+	// An InnoDB MySQL option that may affect performance. Check official MySQL documentation for a detailed description of
+	// this option's use cases.
+	InnodbLruScanDepth *int64 `json:"innodb_lru_scan_depth,omitempty"`
+
+	// The number of I/O Threads for read operations in InnoDB.
+	InnodbReadIoThreads *int64 `json:"innodb_read_io_threads,omitempty"`
+
+	// The number of I/O Threads for write operations in InnoDB.
+	InnodbWriteIoThreads *int64 `json:"innodb_write_io_threads,omitempty"`
+
+	// The maximum size of a packet message buffer in bytes.
+	MaxAllowedPacket *int64 `json:"max_allowed_packet,omitempty"`
+
+	// Maximum age for a binlog in seconds. If a binlog is older, it's archived.
+	MysqlMaxBinlogAgeSec *int64 `json:"mysql_max_binlog_age_sec,omitempty"`
+
+	// The number of seconds to wait for more data from a connection before aborting the read.
+	NetReadTimeout *int64 `json:"net_read_timeout,omitempty"`
+
+	// The number of seconds to wait for a block to be written to a connection before aborting the write.
+	NetWriteTimeout *int64 `json:"net_write_timeout,omitempty"`
+
+	// The comma-separated list of SQL modes applied on this server globally.
+	SQLMode *string `json:"sql_mode,omitempty"`
+
+	// The number of seconds the server waits for activity on a noninteractive connection before closing it.
+	WaitTimeout *int64 `json:"wait_timeout,omitempty"`
+
+	// This variable limits the total number of prepared statements in the server.
+	MaxPreparedStmtCount *int64 `json:"max_prepared_stmt_count,omitempty"`
 }
+
+// Constants associated with the Configuration.LogConnections property.
+// Causes each attempted connection to the server to be logged, as well as successful completion of client
+// authentication.
+const (
+	ConfigurationLogConnectionsOffConst = "off"
+	ConfigurationLogConnectionsOnConst  = "on"
+)
+
+// Constants associated with the Configuration.LogDisconnections property.
+// Causes session terminations to be logged. The log output provides information similar to log_connections, plus the
+// duration of the session.
+const (
+	ConfigurationLogDisconnectionsOffConst = "off"
+	ConfigurationLogDisconnectionsOnConst  = "on"
+)
 
 // Constants associated with the Configuration.SynchronousCommit property.
 // Sets the current transaction's synchronization level.  Off can result in data loss.  remote_write with enable
@@ -2810,12 +2933,13 @@ const (
 	ConfigurationStopWritesOnBgsaveErrorYesConst = "yes"
 )
 
-// Constants associated with the Configuration.MysqlDefaultAuthenticationPlugin property.
+// Constants associated with the Configuration.DefaultAuthenticationPlugin property.
 // Determines which authentication plugin the server assigns to new accounts created by CREATE USER and GRANT statements
 // that do not explicitly specify an authentication plugin.
 const (
-	ConfigurationMysqlDefaultAuthenticationPluginMysqlNativePasswordConst = "mysql_native_password"
-	ConfigurationMysqlDefaultAuthenticationPluginSha256PasswordConst      = "sha256_password"
+	ConfigurationDefaultAuthenticationPluginCachingSha2PasswordConst = "caching_sha2_password"
+	ConfigurationDefaultAuthenticationPluginMysqlNativePasswordConst = "mysql_native_password"
+	ConfigurationDefaultAuthenticationPluginSha256PasswordConst      = "sha256_password"
 )
 
 func (*Configuration) isaConfiguration() bool {
@@ -2829,11 +2953,7 @@ type ConfigurationIntf interface {
 // UnmarshalConfiguration unmarshals an instance of Configuration from the specified map of raw messages.
 func UnmarshalConfiguration(m map[string]json.RawMessage, result interface{}) (err error) {
 	obj := new(Configuration)
-	err = core.UnmarshalPrimitive(m, "max_connections", &obj.MaxConnections)
-	if err != nil {
-		return
-	}
-	err = core.UnmarshalPrimitive(m, "max_prepared_transactions", &obj.MaxPreparedTransactions)
+	err = core.UnmarshalPrimitive(m, "archive_timeout", &obj.ArchiveTimeout)
 	if err != nil {
 		return
 	}
@@ -2842,6 +2962,26 @@ func UnmarshalConfiguration(m map[string]json.RawMessage, result interface{}) (e
 		return
 	}
 	err = core.UnmarshalPrimitive(m, "effective_io_concurrency", &obj.EffectiveIoConcurrency)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "log_connections", &obj.LogConnections)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "log_disconnections", &obj.LogDisconnections)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "log_min_duration_statement", &obj.LogMinDurationStatement)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "max_connections", &obj.MaxConnections)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "max_prepared_transactions", &obj.MaxPreparedTransactions)
 	if err != nil {
 		return
 	}
@@ -2861,19 +3001,23 @@ func UnmarshalConfiguration(m map[string]json.RawMessage, result interface{}) (e
 	if err != nil {
 		return
 	}
+	err = core.UnmarshalPrimitive(m, "tcp_keepalives_count", &obj.TCPKeepalivesCount)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "tcp_keepalives_idle", &obj.TCPKeepalivesIdle)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "tcp_keepalives_interval", &obj.TCPKeepalivesInterval)
+	if err != nil {
+		return
+	}
 	err = core.UnmarshalPrimitive(m, "wal_level", &obj.WalLevel)
 	if err != nil {
 		return
 	}
-	err = core.UnmarshalPrimitive(m, "archive_timeout", &obj.ArchiveTimeout)
-	if err != nil {
-		return
-	}
-	err = core.UnmarshalPrimitive(m, "log_min_duration_statement", &obj.LogMinDurationStatement)
-	if err != nil {
-		return
-	}
-	err = core.UnmarshalPrimitive(m, "maxmemory-redis", &obj.MaxmemoryRedis)
+	err = core.UnmarshalPrimitive(m, "maxmemory", &obj.Maxmemory)
 	if err != nil {
 		return
 	}
@@ -2893,11 +3037,67 @@ func UnmarshalConfiguration(m map[string]json.RawMessage, result interface{}) (e
 	if err != nil {
 		return
 	}
+	err = core.UnmarshalPrimitive(m, "delete_undefined_queues", &obj.DeleteUndefinedQueues)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "default_authentication_plugin", &obj.DefaultAuthenticationPlugin)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "innodb_buffer_pool_size_percentage", &obj.InnodbBufferPoolSizePercentage)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "innodb_flush_log_at_trx_commit", &obj.InnodbFlushLogAtTrxCommit)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "innodb_log_buffer_size", &obj.InnodbLogBufferSize)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "innodb_log_file_size", &obj.InnodbLogFileSize)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "innodb_lru_scan_depth", &obj.InnodbLruScanDepth)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "innodb_read_io_threads", &obj.InnodbReadIoThreads)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "innodb_write_io_threads", &obj.InnodbWriteIoThreads)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "max_allowed_packet", &obj.MaxAllowedPacket)
+	if err != nil {
+		return
+	}
 	err = core.UnmarshalPrimitive(m, "mysql_max_binlog_age_sec", &obj.MysqlMaxBinlogAgeSec)
 	if err != nil {
 		return
 	}
-	err = core.UnmarshalPrimitive(m, "mysql_default_authentication_plugin", &obj.MysqlDefaultAuthenticationPlugin)
+	err = core.UnmarshalPrimitive(m, "net_read_timeout", &obj.NetReadTimeout)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "net_write_timeout", &obj.NetWriteTimeout)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "sql_mode", &obj.SQLMode)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "wait_timeout", &obj.WaitTimeout)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "max_prepared_stmt_count", &obj.MaxPreparedStmtCount)
 	if err != nil {
 		return
 	}
@@ -2913,8 +3113,8 @@ func UnmarshalConfiguration(m map[string]json.RawMessage, result interface{}) (e
 // - ConnectionRabbitMqConnection
 // - ConnectionEtcdConnection
 // - ConnectionMongoDbConnection
-// - ConnectionMongoDbeeOpsManagerConnection
 // - ConnectionMongoDbeeConnection
+// - ConnectionMongoDbeeOpsManagerConnection
 // - ConnectionMySQLConnection
 // - ConnectionDataStaxConnection
 // - ConnectionEnterpriseDbConnection
@@ -2938,11 +3138,11 @@ type Connection struct {
 
 	Mongodb *MongoDbConnectionURI `json:"mongodb,omitempty"`
 
-	OpsManager *ConnectionURI `json:"ops_manager,omitempty"`
-
 	BiConnector *ConnectionURI `json:"bi_connector,omitempty"`
 
 	Analytics *ConnectionURI `json:"analytics,omitempty"`
+
+	OpsManager *ConnectionURI `json:"ops_manager,omitempty"`
 
 	Mysql *MySQLConnectionURI `json:"mysql,omitempty"`
 
@@ -2998,15 +3198,15 @@ func UnmarshalConnection(m map[string]json.RawMessage, result interface{}) (err 
 	if err != nil {
 		return
 	}
-	err = core.UnmarshalModel(m, "ops_manager", &obj.OpsManager, UnmarshalConnectionURI)
-	if err != nil {
-		return
-	}
 	err = core.UnmarshalModel(m, "bi_connector", &obj.BiConnector, UnmarshalConnectionURI)
 	if err != nil {
 		return
 	}
 	err = core.UnmarshalModel(m, "analytics", &obj.Analytics, UnmarshalConnectionURI)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalModel(m, "ops_manager", &obj.OpsManager, UnmarshalConnectionURI)
 	if err != nil {
 		return
 	}
@@ -3265,7 +3465,7 @@ type CreateDatabaseUserOptions struct {
 	// User type.
 	UserType *string `json:"user_type" validate:"required,ne="`
 
-	User *User `json:"user,omitempty"`
+	User UserIntf `json:"user,omitempty"`
 
 	// Allows users to set headers on API requests
 	Headers map[string]string
@@ -3292,7 +3492,7 @@ func (_options *CreateDatabaseUserOptions) SetUserType(userType string) *CreateD
 }
 
 // SetUser : Allow user to set User
-func (_options *CreateDatabaseUserOptions) SetUser(user *User) *CreateDatabaseUserOptions {
+func (_options *CreateDatabaseUserOptions) SetUser(user UserIntf) *CreateDatabaseUserOptions {
 	_options.User = user
 	return _options
 }
@@ -3311,6 +3511,58 @@ type CreateDatabaseUserResponse struct {
 // UnmarshalCreateDatabaseUserResponse unmarshals an instance of CreateDatabaseUserResponse from the specified map of raw messages.
 func UnmarshalCreateDatabaseUserResponse(m map[string]json.RawMessage, result interface{}) (err error) {
 	obj := new(CreateDatabaseUserResponse)
+	err = core.UnmarshalModel(m, "task", &obj.Task, UnmarshalTask)
+	if err != nil {
+		return
+	}
+	reflect.ValueOf(result).Elem().Set(reflect.ValueOf(obj))
+	return
+}
+
+// CreateLogicalReplicationSlotOptions : The CreateLogicalReplicationSlot options.
+type CreateLogicalReplicationSlotOptions struct {
+	// Deployment ID.
+	ID *string `json:"id" validate:"required,ne="`
+
+	LogicalReplicationSlot *LogicalReplicationSlot `json:"logical_replication_slot,omitempty"`
+
+	// Allows users to set headers on API requests
+	Headers map[string]string
+}
+
+// NewCreateLogicalReplicationSlotOptions : Instantiate CreateLogicalReplicationSlotOptions
+func (*CloudDatabasesV5) NewCreateLogicalReplicationSlotOptions(id string) *CreateLogicalReplicationSlotOptions {
+	return &CreateLogicalReplicationSlotOptions{
+		ID: core.StringPtr(id),
+	}
+}
+
+// SetID : Allow user to set ID
+func (_options *CreateLogicalReplicationSlotOptions) SetID(id string) *CreateLogicalReplicationSlotOptions {
+	_options.ID = core.StringPtr(id)
+	return _options
+}
+
+// SetLogicalReplicationSlot : Allow user to set LogicalReplicationSlot
+func (_options *CreateLogicalReplicationSlotOptions) SetLogicalReplicationSlot(logicalReplicationSlot *LogicalReplicationSlot) *CreateLogicalReplicationSlotOptions {
+	_options.LogicalReplicationSlot = logicalReplicationSlot
+	return _options
+}
+
+// SetHeaders : Allow user to set Headers
+func (options *CreateLogicalReplicationSlotOptions) SetHeaders(param map[string]string) *CreateLogicalReplicationSlotOptions {
+	options.Headers = param
+	return options
+}
+
+// CreateLogicalReplicationSlotResponse : CreateLogicalReplicationSlotResponse struct
+type CreateLogicalReplicationSlotResponse struct {
+	Task *Task `json:"task,omitempty"`
+}
+
+// UnmarshalCreateLogicalReplicationSlotResponse unmarshals an instance of CreateLogicalReplicationSlotResponse from the specified map of raw messages.
+func UnmarshalCreateLogicalReplicationSlotResponse(m map[string]json.RawMessage, result interface{}) (err error) {
+	obj := new(CreateLogicalReplicationSlotResponse)
 	err = core.UnmarshalModel(m, "task", &obj.Task, UnmarshalTask)
 	if err != nil {
 		return
@@ -3458,6 +3710,60 @@ type DeleteDatabaseUserResponse struct {
 // UnmarshalDeleteDatabaseUserResponse unmarshals an instance of DeleteDatabaseUserResponse from the specified map of raw messages.
 func UnmarshalDeleteDatabaseUserResponse(m map[string]json.RawMessage, result interface{}) (err error) {
 	obj := new(DeleteDatabaseUserResponse)
+	err = core.UnmarshalModel(m, "task", &obj.Task, UnmarshalTask)
+	if err != nil {
+		return
+	}
+	reflect.ValueOf(result).Elem().Set(reflect.ValueOf(obj))
+	return
+}
+
+// DeleteLogicalReplicationSlotOptions : The DeleteLogicalReplicationSlot options.
+type DeleteLogicalReplicationSlotOptions struct {
+	// Deployment ID.
+	ID *string `json:"id" validate:"required,ne="`
+
+	// Name of the logical replication slot.
+	Name *string `json:"name" validate:"required,ne="`
+
+	// Allows users to set headers on API requests
+	Headers map[string]string
+}
+
+// NewDeleteLogicalReplicationSlotOptions : Instantiate DeleteLogicalReplicationSlotOptions
+func (*CloudDatabasesV5) NewDeleteLogicalReplicationSlotOptions(id string, name string) *DeleteLogicalReplicationSlotOptions {
+	return &DeleteLogicalReplicationSlotOptions{
+		ID:   core.StringPtr(id),
+		Name: core.StringPtr(name),
+	}
+}
+
+// SetID : Allow user to set ID
+func (_options *DeleteLogicalReplicationSlotOptions) SetID(id string) *DeleteLogicalReplicationSlotOptions {
+	_options.ID = core.StringPtr(id)
+	return _options
+}
+
+// SetName : Allow user to set Name
+func (_options *DeleteLogicalReplicationSlotOptions) SetName(name string) *DeleteLogicalReplicationSlotOptions {
+	_options.Name = core.StringPtr(name)
+	return _options
+}
+
+// SetHeaders : Allow user to set Headers
+func (options *DeleteLogicalReplicationSlotOptions) SetHeaders(param map[string]string) *DeleteLogicalReplicationSlotOptions {
+	options.Headers = param
+	return options
+}
+
+// DeleteLogicalReplicationSlotResponse : DeleteLogicalReplicationSlotResponse struct
+type DeleteLogicalReplicationSlotResponse struct {
+	Task *Task `json:"task,omitempty"`
+}
+
+// UnmarshalDeleteLogicalReplicationSlotResponse unmarshals an instance of DeleteLogicalReplicationSlotResponse from the specified map of raw messages.
+func UnmarshalDeleteLogicalReplicationSlotResponse(m map[string]json.RawMessage, result interface{}) (err error) {
+	obj := new(DeleteLogicalReplicationSlotResponse)
 	err = core.UnmarshalModel(m, "task", &obj.Task, UnmarshalTask)
 	if err != nil {
 		return
@@ -4065,6 +4371,15 @@ type Group struct {
 
 	Disk *GroupDisk `json:"disk,omitempty"`
 }
+
+// Constants associated with the Group.ID property.
+// Id/name for group.
+const (
+	GroupIDAnalyticsConst   = "analytics"
+	GroupIDBiConnectorConst = "bi_connector"
+	GroupIDMemberConst      = "member"
+	GroupIDSearchConst      = "search"
+)
 
 // UnmarshalGroup unmarshals an instance of Group from the specified map of raw messages.
 func UnmarshalGroup(m map[string]json.RawMessage, result interface{}) (err error) {
@@ -4714,6 +5029,48 @@ type ListRemotesResponse struct {
 func UnmarshalListRemotesResponse(m map[string]json.RawMessage, result interface{}) (err error) {
 	obj := new(ListRemotesResponse)
 	err = core.UnmarshalModel(m, "remotes", &obj.Remotes, UnmarshalRemotes)
+	if err != nil {
+		return
+	}
+	reflect.ValueOf(result).Elem().Set(reflect.ValueOf(obj))
+	return
+}
+
+// LogicalReplicationSlot : LogicalReplicationSlot struct
+type LogicalReplicationSlot struct {
+	// name of the replication slot.
+	Name *string `json:"name" validate:"required"`
+
+	// name of the database the replication slot is created on.
+	DatabaseName *string `json:"database_name" validate:"required"`
+
+	// creating a replication slot is only supported for use with wal2json.
+	PluginType *string `json:"plugin_type" validate:"required"`
+}
+
+// NewLogicalReplicationSlot : Instantiate LogicalReplicationSlot (Generic Model Constructor)
+func (*CloudDatabasesV5) NewLogicalReplicationSlot(name string, databaseName string, pluginType string) (_model *LogicalReplicationSlot, err error) {
+	_model = &LogicalReplicationSlot{
+		Name:         core.StringPtr(name),
+		DatabaseName: core.StringPtr(databaseName),
+		PluginType:   core.StringPtr(pluginType),
+	}
+	err = core.ValidateStruct(_model, "required parameters")
+	return
+}
+
+// UnmarshalLogicalReplicationSlot unmarshals an instance of LogicalReplicationSlot from the specified map of raw messages.
+func UnmarshalLogicalReplicationSlot(m map[string]json.RawMessage, result interface{}) (err error) {
+	obj := new(LogicalReplicationSlot)
+	err = core.UnmarshalPrimitive(m, "name", &obj.Name)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "database_name", &obj.DatabaseName)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "plugin_type", &obj.PluginType)
 	if err != nil {
 		return
 	}
@@ -5560,33 +5917,101 @@ func UnmarshalUpdateDatabaseConfigurationResponse(m map[string]json.RawMessage, 
 	return
 }
 
+// UpdateUserOptions : The UpdateUser options.
+type UpdateUserOptions struct {
+	// Deployment ID.
+	ID *string `json:"id" validate:"required,ne="`
+
+	// User type.
+	UserType *string `json:"user_type" validate:"required,ne="`
+
+	// User ID.
+	Username *string `json:"username" validate:"required,ne="`
+
+	User UserUpdateIntf `json:"user,omitempty"`
+
+	// Allows users to set headers on API requests
+	Headers map[string]string
+}
+
+// NewUpdateUserOptions : Instantiate UpdateUserOptions
+func (*CloudDatabasesV5) NewUpdateUserOptions(id string, userType string, username string) *UpdateUserOptions {
+	return &UpdateUserOptions{
+		ID:       core.StringPtr(id),
+		UserType: core.StringPtr(userType),
+		Username: core.StringPtr(username),
+	}
+}
+
+// SetID : Allow user to set ID
+func (_options *UpdateUserOptions) SetID(id string) *UpdateUserOptions {
+	_options.ID = core.StringPtr(id)
+	return _options
+}
+
+// SetUserType : Allow user to set UserType
+func (_options *UpdateUserOptions) SetUserType(userType string) *UpdateUserOptions {
+	_options.UserType = core.StringPtr(userType)
+	return _options
+}
+
+// SetUsername : Allow user to set Username
+func (_options *UpdateUserOptions) SetUsername(username string) *UpdateUserOptions {
+	_options.Username = core.StringPtr(username)
+	return _options
+}
+
+// SetUser : Allow user to set User
+func (_options *UpdateUserOptions) SetUser(user UserUpdateIntf) *UpdateUserOptions {
+	_options.User = user
+	return _options
+}
+
+// SetHeaders : Allow user to set Headers
+func (options *UpdateUserOptions) SetHeaders(param map[string]string) *UpdateUserOptions {
+	options.Headers = param
+	return options
+}
+
+// UpdateUserResponse : UpdateUserResponse struct
+type UpdateUserResponse struct {
+	Task *Task `json:"task,omitempty"`
+}
+
+// UnmarshalUpdateUserResponse unmarshals an instance of UpdateUserResponse from the specified map of raw messages.
+func UnmarshalUpdateUserResponse(m map[string]json.RawMessage, result interface{}) (err error) {
+	obj := new(UpdateUserResponse)
+	err = core.UnmarshalModel(m, "task", &obj.Task, UnmarshalTask)
+	if err != nil {
+		return
+	}
+	reflect.ValueOf(result).Elem().Set(reflect.ValueOf(obj))
+	return
+}
+
 // User : User struct
+// Models which "extend" this model:
+// - UserDatabaseUser
+// - UserRedisDatabaseUser
+// - UserOpsManagerUser
 type User struct {
 	// Username for new user.
-	Username *string `json:"username" validate:"required"`
+	Username *string `json:"username,omitempty"`
 
-	// Password for new user.
-	Password *string `json:"password" validate:"required"`
+	// Password for new user. Password must be at least 15 characters in length and contain a letter and number.
+	Password *string `json:"password,omitempty"`
 
-	// Role for new user. Available for MongoDB Enterprise Ops Manager users ONLY.
+	// RBAC role for Redis database user types. Available for Redis 6.0 and newer. Must use Redis ACL syntax to add or
+	// remove command categories. Allowed categories are `read`, `write`, `admin` and `all`.
 	Role *string `json:"role,omitempty"`
 }
 
-// Constants associated with the User.Role property.
-// Role for new user. Available for MongoDB Enterprise Ops Manager users ONLY.
-const (
-	UserRoleGroupDataAccessAdminConst = "group_data_access_admin"
-	UserRoleGroupReadOnlyConst        = "group_read_only"
-)
+func (*User) isaUser() bool {
+	return true
+}
 
-// NewUser : Instantiate User (Generic Model Constructor)
-func (*CloudDatabasesV5) NewUser(username string, password string) (_model *User, err error) {
-	_model = &User{
-		Username: core.StringPtr(username),
-		Password: core.StringPtr(password),
-	}
-	err = core.ValidateStruct(_model, "required parameters")
-	return
+type UserIntf interface {
+	isaUser() bool
 }
 
 // UnmarshalUser unmarshals an instance of User from the specified map of raw messages.
@@ -5596,6 +6021,42 @@ func UnmarshalUser(m map[string]json.RawMessage, result interface{}) (err error)
 	if err != nil {
 		return
 	}
+	err = core.UnmarshalPrimitive(m, "password", &obj.Password)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "role", &obj.Role)
+	if err != nil {
+		return
+	}
+	reflect.ValueOf(result).Elem().Set(reflect.ValueOf(obj))
+	return
+}
+
+// UserUpdate : UserUpdate struct
+// Models which "extend" this model:
+// - UserUpdatePasswordSetting
+// - UserUpdateRedisRoleSetting
+type UserUpdate struct {
+	// Password for user. Password must be at least 15 characters in length and contain a letter and number.
+	Password *string `json:"password,omitempty"`
+
+	// RBAC role for redis database user types. Available for Redis 6.0 and above. Must use Redis ACL syntax to add or
+	// remove command categories. Allowed categories are `read`, `write`, `admin` and `all`.
+	Role *string `json:"role,omitempty"`
+}
+
+func (*UserUpdate) isaUserUpdate() bool {
+	return true
+}
+
+type UserUpdateIntf interface {
+	isaUserUpdate() bool
+}
+
+// UnmarshalUserUpdate unmarshals an instance of UserUpdate from the specified map of raw messages.
+func UnmarshalUserUpdate(m map[string]json.RawMessage, result interface{}) (err error) {
+	obj := new(UserUpdate)
 	err = core.UnmarshalPrimitive(m, "password", &obj.Password)
 	if err != nil {
 		return
@@ -5674,23 +6135,65 @@ func UnmarshalAutoscalingSetGroupAutoscalingAutoscalingMemoryGroup(m map[string]
 // ConfigurationMySQLConfiguration : MySQL Configuration.
 // This model "extends" Configuration
 type ConfigurationMySQLConfiguration struct {
-	// Maximum age for a binlog in seconds. If a binlog is older, it's archived.
-	MysqlMaxBinlogAgeSec *int64 `json:"mysql_max_binlog_age_sec,omitempty"`
+	// Determines which authentication plugin the server assigns to new accounts created by CREATE USER and GRANT
+	// statements that do not explicitly specify an authentication plugin.
+	DefaultAuthenticationPlugin *string `json:"default_authentication_plugin,omitempty"`
+
+	// Percentage of memory to use for innodb_buffer_pool_size.
+	InnodbBufferPoolSizePercentage *int64 `json:"innodb_buffer_pool_size_percentage,omitempty"`
+
+	// Controls the balance between strict ACID compliance for commit operations and higher performance. See official MySQL
+	// documentation for more details.
+	InnodbFlushLogAtTrxCommit *int64 `json:"innodb_flush_log_at_trx_commit,omitempty"`
+
+	// InnoDB log buffer size in bytes.
+	InnodbLogBufferSize *int64 `json:"innodb_log_buffer_size,omitempty"`
+
+	// InnoDB log file size in bytes.
+	InnodbLogFileSize *int64 `json:"innodb_log_file_size,omitempty"`
+
+	// An InnoDB MySQL option that may affect performance. Check official MySQL documentation for a detailed description of
+	// this option's use cases.
+	InnodbLruScanDepth *int64 `json:"innodb_lru_scan_depth,omitempty"`
+
+	// The number of I/O Threads for read operations in InnoDB.
+	InnodbReadIoThreads *int64 `json:"innodb_read_io_threads,omitempty"`
+
+	// The number of I/O Threads for write operations in InnoDB.
+	InnodbWriteIoThreads *int64 `json:"innodb_write_io_threads,omitempty"`
+
+	// The maximum size of a packet message buffer in bytes.
+	MaxAllowedPacket *int64 `json:"max_allowed_packet,omitempty"`
 
 	// Maximum number of allowed MySQL connections.
 	MaxConnections *int64 `json:"max_connections,omitempty"`
 
-	// Determines which authentication plugin the server assigns to new accounts created by CREATE USER and GRANT
-	// statements that do not explicitly specify an authentication plugin.
-	MysqlDefaultAuthenticationPlugin *string `json:"mysql_default_authentication_plugin,omitempty"`
+	// Maximum age for a binlog in seconds. If a binlog is older, it's archived.
+	MysqlMaxBinlogAgeSec *int64 `json:"mysql_max_binlog_age_sec,omitempty"`
+
+	// The number of seconds to wait for more data from a connection before aborting the read.
+	NetReadTimeout *int64 `json:"net_read_timeout,omitempty"`
+
+	// The number of seconds to wait for a block to be written to a connection before aborting the write.
+	NetWriteTimeout *int64 `json:"net_write_timeout,omitempty"`
+
+	// The comma-separated list of SQL modes applied on this server globally.
+	SQLMode *string `json:"sql_mode,omitempty"`
+
+	// The number of seconds the server waits for activity on a noninteractive connection before closing it.
+	WaitTimeout *int64 `json:"wait_timeout,omitempty"`
+
+	// This variable limits the total number of prepared statements in the server.
+	MaxPreparedStmtCount *int64 `json:"max_prepared_stmt_count,omitempty"`
 }
 
-// Constants associated with the ConfigurationMySQLConfiguration.MysqlDefaultAuthenticationPlugin property.
+// Constants associated with the ConfigurationMySQLConfiguration.DefaultAuthenticationPlugin property.
 // Determines which authentication plugin the server assigns to new accounts created by CREATE USER and GRANT statements
 // that do not explicitly specify an authentication plugin.
 const (
-	ConfigurationMySQLConfigurationMysqlDefaultAuthenticationPluginMysqlNativePasswordConst = "mysql_native_password"
-	ConfigurationMySQLConfigurationMysqlDefaultAuthenticationPluginSha256PasswordConst      = "sha256_password"
+	ConfigurationMySQLConfigurationDefaultAuthenticationPluginCachingSha2PasswordConst = "caching_sha2_password"
+	ConfigurationMySQLConfigurationDefaultAuthenticationPluginMysqlNativePasswordConst = "mysql_native_password"
+	ConfigurationMySQLConfigurationDefaultAuthenticationPluginSha256PasswordConst      = "sha256_password"
 )
 
 func (*ConfigurationMySQLConfiguration) isaConfiguration() bool {
@@ -5700,7 +6203,39 @@ func (*ConfigurationMySQLConfiguration) isaConfiguration() bool {
 // UnmarshalConfigurationMySQLConfiguration unmarshals an instance of ConfigurationMySQLConfiguration from the specified map of raw messages.
 func UnmarshalConfigurationMySQLConfiguration(m map[string]json.RawMessage, result interface{}) (err error) {
 	obj := new(ConfigurationMySQLConfiguration)
-	err = core.UnmarshalPrimitive(m, "mysql_max_binlog_age_sec", &obj.MysqlMaxBinlogAgeSec)
+	err = core.UnmarshalPrimitive(m, "default_authentication_plugin", &obj.DefaultAuthenticationPlugin)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "innodb_buffer_pool_size_percentage", &obj.InnodbBufferPoolSizePercentage)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "innodb_flush_log_at_trx_commit", &obj.InnodbFlushLogAtTrxCommit)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "innodb_log_buffer_size", &obj.InnodbLogBufferSize)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "innodb_log_file_size", &obj.InnodbLogFileSize)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "innodb_lru_scan_depth", &obj.InnodbLruScanDepth)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "innodb_read_io_threads", &obj.InnodbReadIoThreads)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "innodb_write_io_threads", &obj.InnodbWriteIoThreads)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "max_allowed_packet", &obj.MaxAllowedPacket)
 	if err != nil {
 		return
 	}
@@ -5708,7 +6243,27 @@ func UnmarshalConfigurationMySQLConfiguration(m map[string]json.RawMessage, resu
 	if err != nil {
 		return
 	}
-	err = core.UnmarshalPrimitive(m, "mysql_default_authentication_plugin", &obj.MysqlDefaultAuthenticationPlugin)
+	err = core.UnmarshalPrimitive(m, "mysql_max_binlog_age_sec", &obj.MysqlMaxBinlogAgeSec)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "net_read_timeout", &obj.NetReadTimeout)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "net_write_timeout", &obj.NetWriteTimeout)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "sql_mode", &obj.SQLMode)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "wait_timeout", &obj.WaitTimeout)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "max_prepared_stmt_count", &obj.MaxPreparedStmtCount)
 	if err != nil {
 		return
 	}
@@ -5719,11 +6274,8 @@ func UnmarshalConfigurationMySQLConfiguration(m map[string]json.RawMessage, resu
 // ConfigurationPgConfiguration : PostgreSQL and EnterpriseDB Configuration.
 // This model "extends" Configuration
 type ConfigurationPgConfiguration struct {
-	// Maximum connections allowed.
-	MaxConnections *int64 `json:"max_connections,omitempty"`
-
-	// Max number of transactions that can be in the "prepared" state simultaneously.
-	MaxPreparedTransactions *int64 `json:"max_prepared_transactions,omitempty"`
+	// The number of seconds to wait before forces a switch to the next WAL file if a new file has not been started.
+	ArchiveTimeout *int64 `json:"archive_timeout,omitempty"`
 
 	// Deadlock timeout in ms. The time to wait on a lock before checking for deadlock.  Also the duration where lock waits
 	// will be logged.
@@ -5731,6 +6283,23 @@ type ConfigurationPgConfiguration struct {
 
 	// Number of simultaneous requests that can be handled efficiently by the disk subsystem.
 	EffectiveIoConcurrency *int64 `json:"effective_io_concurrency,omitempty"`
+
+	// Causes each attempted connection to the server to be logged, as well as successful completion of client
+	// authentication.
+	LogConnections *string `json:"log_connections,omitempty"`
+
+	// Causes session terminations to be logged. The log output provides information similar to log_connections, plus the
+	// duration of the session.
+	LogDisconnections *string `json:"log_disconnections,omitempty"`
+
+	// The minimum number of milliseconds for execution time above which statements will be logged.
+	LogMinDurationStatement *int64 `json:"log_min_duration_statement,omitempty"`
+
+	// Maximum connections allowed.
+	MaxConnections *int64 `json:"max_connections,omitempty"`
+
+	// Max number of transactions that can be in the "prepared" state simultaneously.
+	MaxPreparedTransactions *int64 `json:"max_prepared_transactions,omitempty"`
 
 	// Maximum number of simultaneously defined replication slots.
 	MaxReplicationSlots *int64 `json:"max_replication_slots,omitempty"`
@@ -5746,15 +6315,35 @@ type ConfigurationPgConfiguration struct {
 	// synchronous replication which will impact performance and availabilty.
 	SynchronousCommit *string `json:"synchronous_commit,omitempty"`
 
+	// The number of TCP keepalives that can be lost before the server's connection to the client is considered dead.
+	TCPKeepalivesCount *int64 `json:"tcp_keepalives_count,omitempty"`
+
+	// The number of seconds of inactivity after which TCP should send a keepalive message to the client.
+	TCPKeepalivesIdle *int64 `json:"tcp_keepalives_idle,omitempty"`
+
+	// The number of seconds after which a TCP keepalive message that is not acknowledged by the client should be
+	// retransmitted.
+	TCPKeepalivesInterval *int64 `json:"tcp_keepalives_interval,omitempty"`
+
 	// WAL level.  Set to logical to use logical decoding or logical replication.
 	WalLevel *string `json:"wal_level,omitempty"`
-
-	// The number of seconds to wait before forces a switch to the next WAL file if a new file has not been started.
-	ArchiveTimeout *int64 `json:"archive_timeout,omitempty"`
-
-	// The minimum number of milliseconds for execution time above which statements will be logged.
-	LogMinDurationStatement *int64 `json:"log_min_duration_statement,omitempty"`
 }
+
+// Constants associated with the ConfigurationPgConfiguration.LogConnections property.
+// Causes each attempted connection to the server to be logged, as well as successful completion of client
+// authentication.
+const (
+	ConfigurationPgConfigurationLogConnectionsOffConst = "off"
+	ConfigurationPgConfigurationLogConnectionsOnConst  = "on"
+)
+
+// Constants associated with the ConfigurationPgConfiguration.LogDisconnections property.
+// Causes session terminations to be logged. The log output provides information similar to log_connections, plus the
+// duration of the session.
+const (
+	ConfigurationPgConfigurationLogDisconnectionsOffConst = "off"
+	ConfigurationPgConfigurationLogDisconnectionsOnConst  = "on"
+)
 
 // Constants associated with the ConfigurationPgConfiguration.SynchronousCommit property.
 // Sets the current transaction's synchronization level.  Off can result in data loss.  remote_write with enable
@@ -5778,11 +6367,7 @@ func (*ConfigurationPgConfiguration) isaConfiguration() bool {
 // UnmarshalConfigurationPgConfiguration unmarshals an instance of ConfigurationPgConfiguration from the specified map of raw messages.
 func UnmarshalConfigurationPgConfiguration(m map[string]json.RawMessage, result interface{}) (err error) {
 	obj := new(ConfigurationPgConfiguration)
-	err = core.UnmarshalPrimitive(m, "max_connections", &obj.MaxConnections)
-	if err != nil {
-		return
-	}
-	err = core.UnmarshalPrimitive(m, "max_prepared_transactions", &obj.MaxPreparedTransactions)
+	err = core.UnmarshalPrimitive(m, "archive_timeout", &obj.ArchiveTimeout)
 	if err != nil {
 		return
 	}
@@ -5791,6 +6376,26 @@ func UnmarshalConfigurationPgConfiguration(m map[string]json.RawMessage, result 
 		return
 	}
 	err = core.UnmarshalPrimitive(m, "effective_io_concurrency", &obj.EffectiveIoConcurrency)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "log_connections", &obj.LogConnections)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "log_disconnections", &obj.LogDisconnections)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "log_min_duration_statement", &obj.LogMinDurationStatement)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "max_connections", &obj.MaxConnections)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "max_prepared_transactions", &obj.MaxPreparedTransactions)
 	if err != nil {
 		return
 	}
@@ -5810,15 +6415,41 @@ func UnmarshalConfigurationPgConfiguration(m map[string]json.RawMessage, result 
 	if err != nil {
 		return
 	}
+	err = core.UnmarshalPrimitive(m, "tcp_keepalives_count", &obj.TCPKeepalivesCount)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "tcp_keepalives_idle", &obj.TCPKeepalivesIdle)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "tcp_keepalives_interval", &obj.TCPKeepalivesInterval)
+	if err != nil {
+		return
+	}
 	err = core.UnmarshalPrimitive(m, "wal_level", &obj.WalLevel)
 	if err != nil {
 		return
 	}
-	err = core.UnmarshalPrimitive(m, "archive_timeout", &obj.ArchiveTimeout)
-	if err != nil {
-		return
-	}
-	err = core.UnmarshalPrimitive(m, "log_min_duration_statement", &obj.LogMinDurationStatement)
+	reflect.ValueOf(result).Elem().Set(reflect.ValueOf(obj))
+	return
+}
+
+// ConfigurationRabbitMqConfiguration : MySQL Configuration.
+// This model "extends" Configuration
+type ConfigurationRabbitMqConfiguration struct {
+	// Automatically delete undefined queues.
+	DeleteUndefinedQueues *bool `json:"delete_undefined_queues,omitempty"`
+}
+
+func (*ConfigurationRabbitMqConfiguration) isaConfiguration() bool {
+	return true
+}
+
+// UnmarshalConfigurationRabbitMqConfiguration unmarshals an instance of ConfigurationRabbitMqConfiguration from the specified map of raw messages.
+func UnmarshalConfigurationRabbitMqConfiguration(m map[string]json.RawMessage, result interface{}) (err error) {
+	obj := new(ConfigurationRabbitMqConfiguration)
+	err = core.UnmarshalPrimitive(m, "delete_undefined_queues", &obj.DeleteUndefinedQueues)
 	if err != nil {
 		return
 	}
@@ -5830,7 +6461,7 @@ func UnmarshalConfigurationPgConfiguration(m map[string]json.RawMessage, result 
 // This model "extends" Configuration
 type ConfigurationRedisConfiguration struct {
 	// The maximum memory Redis should use, as bytes.
-	MaxmemoryRedis *int64 `json:"maxmemory-redis,omitempty"`
+	Maxmemory *int64 `json:"maxmemory,omitempty"`
 
 	// The policy with which Redis evicts keys when maximum memory is reached.
 	MaxmemoryPolicy *string `json:"maxmemory-policy,omitempty"`
@@ -5877,7 +6508,7 @@ func (*ConfigurationRedisConfiguration) isaConfiguration() bool {
 // UnmarshalConfigurationRedisConfiguration unmarshals an instance of ConfigurationRedisConfiguration from the specified map of raw messages.
 func UnmarshalConfigurationRedisConfiguration(m map[string]json.RawMessage, result interface{}) (err error) {
 	obj := new(ConfigurationRedisConfiguration)
-	err = core.UnmarshalPrimitive(m, "maxmemory-redis", &obj.MaxmemoryRedis)
+	err = core.UnmarshalPrimitive(m, "maxmemory", &obj.Maxmemory)
 	if err != nil {
 		return
 	}
@@ -6224,6 +6855,209 @@ func UnmarshalConnectionRedisConnection(m map[string]json.RawMessage, result int
 		return
 	}
 	err = core.UnmarshalModel(m, "cli", &obj.Cli, UnmarshalConnectionCli)
+	if err != nil {
+		return
+	}
+	reflect.ValueOf(result).Elem().Set(reflect.ValueOf(obj))
+	return
+}
+
+// UserUpdatePasswordSetting : UserUpdatePasswordSetting struct
+// This model "extends" UserUpdate
+type UserUpdatePasswordSetting struct {
+	// Password for user. Password must be at least 15 characters in length and contain a letter and number.
+	Password *string `json:"password" validate:"required"`
+}
+
+// NewUserUpdatePasswordSetting : Instantiate UserUpdatePasswordSetting (Generic Model Constructor)
+func (*CloudDatabasesV5) NewUserUpdatePasswordSetting(password string) (_model *UserUpdatePasswordSetting, err error) {
+	_model = &UserUpdatePasswordSetting{
+		Password: core.StringPtr(password),
+	}
+	err = core.ValidateStruct(_model, "required parameters")
+	return
+}
+
+func (*UserUpdatePasswordSetting) isaUserUpdate() bool {
+	return true
+}
+
+// UnmarshalUserUpdatePasswordSetting unmarshals an instance of UserUpdatePasswordSetting from the specified map of raw messages.
+func UnmarshalUserUpdatePasswordSetting(m map[string]json.RawMessage, result interface{}) (err error) {
+	obj := new(UserUpdatePasswordSetting)
+	err = core.UnmarshalPrimitive(m, "password", &obj.Password)
+	if err != nil {
+		return
+	}
+	reflect.ValueOf(result).Elem().Set(reflect.ValueOf(obj))
+	return
+}
+
+// UserUpdateRedisRoleSetting : UserUpdateRedisRoleSetting struct
+// This model "extends" UserUpdate
+type UserUpdateRedisRoleSetting struct {
+	// RBAC role for redis database user types. Available for Redis 6.0 and above. Must use Redis ACL syntax to add or
+	// remove command categories. Allowed categories are `read`, `write`, `admin` and `all`.
+	Role *string `json:"role" validate:"required"`
+}
+
+// NewUserUpdateRedisRoleSetting : Instantiate UserUpdateRedisRoleSetting (Generic Model Constructor)
+func (*CloudDatabasesV5) NewUserUpdateRedisRoleSetting(role string) (_model *UserUpdateRedisRoleSetting, err error) {
+	_model = &UserUpdateRedisRoleSetting{
+		Role: core.StringPtr(role),
+	}
+	err = core.ValidateStruct(_model, "required parameters")
+	return
+}
+
+func (*UserUpdateRedisRoleSetting) isaUserUpdate() bool {
+	return true
+}
+
+// UnmarshalUserUpdateRedisRoleSetting unmarshals an instance of UserUpdateRedisRoleSetting from the specified map of raw messages.
+func UnmarshalUserUpdateRedisRoleSetting(m map[string]json.RawMessage, result interface{}) (err error) {
+	obj := new(UserUpdateRedisRoleSetting)
+	err = core.UnmarshalPrimitive(m, "role", &obj.Role)
+	if err != nil {
+		return
+	}
+	reflect.ValueOf(result).Elem().Set(reflect.ValueOf(obj))
+	return
+}
+
+// UserDatabaseUser : UserDatabaseUser struct
+// This model "extends" User
+type UserDatabaseUser struct {
+	// Username for new user.
+	Username *string `json:"username" validate:"required"`
+
+	// Password for new user. Password must be at least 15 characters in length and contain a letter and number.
+	Password *string `json:"password" validate:"required"`
+}
+
+// NewUserDatabaseUser : Instantiate UserDatabaseUser (Generic Model Constructor)
+func (*CloudDatabasesV5) NewUserDatabaseUser(username string, password string) (_model *UserDatabaseUser, err error) {
+	_model = &UserDatabaseUser{
+		Username: core.StringPtr(username),
+		Password: core.StringPtr(password),
+	}
+	err = core.ValidateStruct(_model, "required parameters")
+	return
+}
+
+func (*UserDatabaseUser) isaUser() bool {
+	return true
+}
+
+// UnmarshalUserDatabaseUser unmarshals an instance of UserDatabaseUser from the specified map of raw messages.
+func UnmarshalUserDatabaseUser(m map[string]json.RawMessage, result interface{}) (err error) {
+	obj := new(UserDatabaseUser)
+	err = core.UnmarshalPrimitive(m, "username", &obj.Username)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "password", &obj.Password)
+	if err != nil {
+		return
+	}
+	reflect.ValueOf(result).Elem().Set(reflect.ValueOf(obj))
+	return
+}
+
+// UserOpsManagerUser : UserOpsManagerUser struct
+// This model "extends" User
+type UserOpsManagerUser struct {
+	// Username for new user.
+	Username *string `json:"username" validate:"required"`
+
+	// Password for new Ops Manager user. Password must be at least 15 characters in length and contain a letter, number
+	// and a special character.
+	Password *string `json:"password" validate:"required"`
+
+	// Role for new user. Available for MongoDB Enterprise Ops Manager users.
+	Role *string `json:"role,omitempty"`
+}
+
+// Constants associated with the UserOpsManagerUser.Role property.
+// Role for new user. Available for MongoDB Enterprise Ops Manager users.
+const (
+	UserOpsManagerUserRoleGroupDataAccessAdminConst = "group_data_access_admin"
+	UserOpsManagerUserRoleGroupReadOnlyConst        = "group_read_only"
+)
+
+// NewUserOpsManagerUser : Instantiate UserOpsManagerUser (Generic Model Constructor)
+func (*CloudDatabasesV5) NewUserOpsManagerUser(username string, password string) (_model *UserOpsManagerUser, err error) {
+	_model = &UserOpsManagerUser{
+		Username: core.StringPtr(username),
+		Password: core.StringPtr(password),
+	}
+	err = core.ValidateStruct(_model, "required parameters")
+	return
+}
+
+func (*UserOpsManagerUser) isaUser() bool {
+	return true
+}
+
+// UnmarshalUserOpsManagerUser unmarshals an instance of UserOpsManagerUser from the specified map of raw messages.
+func UnmarshalUserOpsManagerUser(m map[string]json.RawMessage, result interface{}) (err error) {
+	obj := new(UserOpsManagerUser)
+	err = core.UnmarshalPrimitive(m, "username", &obj.Username)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "password", &obj.Password)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "role", &obj.Role)
+	if err != nil {
+		return
+	}
+	reflect.ValueOf(result).Elem().Set(reflect.ValueOf(obj))
+	return
+}
+
+// UserRedisDatabaseUser : UserRedisDatabaseUser struct
+// This model "extends" User
+type UserRedisDatabaseUser struct {
+	// Username for new user.
+	Username *string `json:"username" validate:"required"`
+
+	// Password for new user. Password must be at least 15 characters in length and contain a letter and number.
+	Password *string `json:"password" validate:"required"`
+
+	// RBAC role for Redis database user types. Available for Redis 6.0 and newer. Must use Redis ACL syntax to add or
+	// remove command categories. Allowed categories are `read`, `write`, `admin` and `all`.
+	Role *string `json:"role,omitempty"`
+}
+
+// NewUserRedisDatabaseUser : Instantiate UserRedisDatabaseUser (Generic Model Constructor)
+func (*CloudDatabasesV5) NewUserRedisDatabaseUser(username string, password string) (_model *UserRedisDatabaseUser, err error) {
+	_model = &UserRedisDatabaseUser{
+		Username: core.StringPtr(username),
+		Password: core.StringPtr(password),
+	}
+	err = core.ValidateStruct(_model, "required parameters")
+	return
+}
+
+func (*UserRedisDatabaseUser) isaUser() bool {
+	return true
+}
+
+// UnmarshalUserRedisDatabaseUser unmarshals an instance of UserRedisDatabaseUser from the specified map of raw messages.
+func UnmarshalUserRedisDatabaseUser(m map[string]json.RawMessage, result interface{}) (err error) {
+	obj := new(UserRedisDatabaseUser)
+	err = core.UnmarshalPrimitive(m, "username", &obj.Username)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "password", &obj.Password)
+	if err != nil {
+		return
+	}
+	err = core.UnmarshalPrimitive(m, "role", &obj.Role)
 	if err != nil {
 		return
 	}

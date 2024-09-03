@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/conns"
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/flex"
@@ -47,6 +48,7 @@ func ResourceIBMSchematicsAction() *schema.Resource {
 			"location": {
 				Type:         schema.TypeString,
 				Optional:     true,
+				Computed:     true,
 				ValidateFunc: validate.InvokeValidator("ibm_schematics_action", "location"),
 				Description:  "List of locations supported by IBM Cloud Schematics service.  While creating your workspace or action, choose the right region, since it cannot be changed.  Note, this does not limit the location of the IBM Cloud resources, provisioned using Schematics.",
 			},
@@ -856,7 +858,6 @@ func ResourceIBMSchematicsAction() *schema.Resource {
 			},
 			"sys_lock": {
 				Type:        schema.TypeList,
-				Optional:    true,
 				Computed:    true,
 				Description: "System lock status.",
 				Elem: &schema.Resource{
@@ -979,7 +980,13 @@ func resourceIBMSchematicsActionCreate(context context.Context, d *schema.Resour
 	if err != nil {
 		return diag.FromErr(err)
 	}
-
+	if r, ok := d.GetOk("location"); ok {
+		region := r.(string)
+		schematicsURL, updatedURL, _ := SchematicsEndpointURL(region, meta)
+		if updatedURL {
+			schematicsClient.Service.Options.URL = schematicsURL
+		}
+	}
 	createActionOptions := &schematicsv1.CreateActionOptions{}
 
 	if _, ok := d.GetOk("name"); ok {
@@ -1063,14 +1070,6 @@ func resourceIBMSchematicsActionCreate(context context.Context, d *schema.Resour
 			settings = append(settings, settingsItem)
 		}
 		createActionOptions.SetSettings(settings)
-	}
-	if _, ok := d.GetOk("state"); ok {
-		state := resourceIBMSchematicsActionMapToActionState(d.Get("state.0").(map[string]interface{}))
-		createActionOptions.SetState(&state)
-	}
-	if _, ok := d.GetOk("sys_lock"); ok {
-		sysLock := resourceIBMSchematicsActionMapToSystemLock(d.Get("sys_lock.0").(map[string]interface{}))
-		createActionOptions.SetSysLock(&sysLock)
 	}
 	if _, ok := d.GetOk("x_github_token"); ok {
 		createActionOptions.SetXGithubToken(d.Get("x_github_token").(string))
@@ -1337,7 +1336,12 @@ func resourceIBMSchematicsActionRead(context context.Context, d *schema.Resource
 	if err != nil {
 		return diag.FromErr(err)
 	}
-
+	actionIDSplit := strings.Split(d.Id(), ".")
+	region := actionIDSplit[0]
+	schematicsURL, updatedURL, _ := SchematicsEndpointURL(region, meta)
+	if updatedURL {
+		schematicsClient.Service.Options.URL = schematicsURL
+	}
 	getActionOptions := &schematicsv1.GetActionOptions{}
 
 	getActionOptions.SetActionID(d.Id())
@@ -1351,7 +1355,6 @@ func resourceIBMSchematicsActionRead(context context.Context, d *schema.Resource
 		log.Printf("[DEBUG] GetActionWithContext failed %s\n%s", err, response)
 		return diag.FromErr(fmt.Errorf("GetActionWithContext failed %s\n%s", err, response))
 	}
-
 	if err = d.Set("name", action.Name); err != nil {
 		return diag.FromErr(fmt.Errorf("[ERROR] Error setting name: %s", err))
 	}
@@ -1781,6 +1784,12 @@ func resourceIBMSchematicsActionUpdate(context context.Context, d *schema.Resour
 	if err != nil {
 		return diag.FromErr(err)
 	}
+	actionIDSplit := strings.Split(d.Id(), ".")
+	region := actionIDSplit[0]
+	schematicsURL, updatedURL, _ := SchematicsEndpointURL(region, meta)
+	if updatedURL {
+		schematicsClient.Service.Options.URL = schematicsURL
+	}
 
 	updateActionOptions := &schematicsv1.UpdateActionOptions{}
 
@@ -1895,23 +1904,6 @@ func resourceIBMSchematicsActionUpdate(context context.Context, d *schema.Resour
 		updateActionOptions.SetSettings(settings)
 		hasChange = true
 	}
-	if d.HasChange("state") {
-		stateAttr := d.Get("state").([]interface{})
-		if len(stateAttr) > 0 {
-			state := resourceIBMSchematicsActionMapToActionState(d.Get("state.0").(map[string]interface{}))
-			updateActionOptions.SetState(&state)
-			hasChange = true
-		}
-	}
-	if d.HasChange("sys_lock") {
-		sysLockAttr := d.Get("sys_lock").([]interface{})
-		if len(sysLockAttr) > 0 {
-			sysLock := resourceIBMSchematicsActionMapToSystemLock(d.Get("sys_lock.0").(map[string]interface{}))
-			updateActionOptions.SetSysLock(&sysLock)
-			hasChange = true
-		}
-	}
-
 	if hasChange {
 		_, response, err := schematicsClient.UpdateActionWithContext(context, updateActionOptions)
 		if err != nil {
@@ -1928,7 +1920,12 @@ func resourceIBMSchematicsActionDelete(context context.Context, d *schema.Resour
 	if err != nil {
 		return diag.FromErr(err)
 	}
-
+	actionIDSplit := strings.Split(d.Id(), ".")
+	region := actionIDSplit[0]
+	schematicsURL, updatedURL, _ := SchematicsEndpointURL(region, meta)
+	if updatedURL {
+		schematicsClient.Service.Options.URL = schematicsURL
+	}
 	deleteActionOptions := &schematicsv1.DeleteActionOptions{}
 
 	deleteActionOptions.SetActionID(d.Id())

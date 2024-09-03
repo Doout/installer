@@ -3,13 +3,14 @@ package manifests
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"path/filepath"
 	"strings"
 	"text/template"
 
-	"github.com/ghodss/yaml"
 	"github.com/pkg/errors"
+	"sigs.k8s.io/yaml"
 
 	"github.com/openshift/installer/pkg/asset"
 	"github.com/openshift/installer/pkg/asset/installconfig"
@@ -62,6 +63,8 @@ func (m *Manifests) Dependencies() []asset.Asset {
 		&Proxy{},
 		&Scheduler{},
 		&ImageContentSourcePolicy{},
+		&ClusterCSIDriverConfig{},
+		&ImageDigestMirrorSet{},
 		&tls.RootCA{},
 		&tls.MCSCertKey{},
 
@@ -74,7 +77,7 @@ func (m *Manifests) Dependencies() []asset.Asset {
 }
 
 // Generate generates the respective operator config.yml files
-func (m *Manifests) Generate(dependencies asset.Parents) error {
+func (m *Manifests) Generate(_ context.Context, dependencies asset.Parents) error {
 	ingress := &Ingress{}
 	dns := &DNS{}
 	network := &Networking{}
@@ -83,7 +86,10 @@ func (m *Manifests) Generate(dependencies asset.Parents) error {
 	proxy := &Proxy{}
 	scheduler := &Scheduler{}
 	imageContentSourcePolicy := &ImageContentSourcePolicy{}
-	dependencies.Get(installConfig, ingress, dns, network, infra, proxy, scheduler, imageContentSourcePolicy)
+	clusterCSIDriverConfig := &ClusterCSIDriverConfig{}
+	imageDigestMirrorSet := &ImageDigestMirrorSet{}
+
+	dependencies.Get(installConfig, ingress, dns, network, infra, proxy, scheduler, imageContentSourcePolicy, imageDigestMirrorSet, clusterCSIDriverConfig)
 
 	redactedConfig, err := redactedInstallConfig(*installConfig.Config)
 	if err != nil {
@@ -118,6 +124,8 @@ func (m *Manifests) Generate(dependencies asset.Parents) error {
 	m.FileList = append(m.FileList, proxy.Files()...)
 	m.FileList = append(m.FileList, scheduler.Files()...)
 	m.FileList = append(m.FileList, imageContentSourcePolicy.Files()...)
+	m.FileList = append(m.FileList, clusterCSIDriverConfig.Files()...)
+	m.FileList = append(m.FileList, imageDigestMirrorSet.Files()...)
 
 	asset.SortFiles(m.FileList)
 

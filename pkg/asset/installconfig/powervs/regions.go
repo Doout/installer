@@ -7,7 +7,6 @@ import (
 
 	survey "github.com/AlecAivazis/survey/v2"
 	"github.com/AlecAivazis/survey/v2/core"
-	"github.com/pkg/errors"
 
 	"github.com/openshift/installer/pkg/types/powervs"
 )
@@ -49,7 +48,7 @@ func IsKnownZone(region string, zone string) bool {
 }
 
 // GetRegion prompts the user to select a region and returns that region.
-func GetRegion() (string, error) {
+func GetRegion(defaultRegion string) (string, error) {
 	regions := knownRegions()
 
 	longRegions := make([]string, 0, len(regions))
@@ -72,19 +71,26 @@ func GetRegion() (string, error) {
 	}
 
 	var region string
+	li := sort.SearchStrings(shortRegions, defaultRegion)
+	if li == len(shortRegions) || shortRegions[li] != defaultRegion {
+		defaultRegion = "dal"
+	} else {
+		defaultRegion = longRegions[li]
+	}
 
 	err := survey.Ask([]*survey.Question{
 		{
 			Prompt: &survey.Select{
 				Message: "Region",
 				Help:    "The Power VS region to be used for installation.",
+				Default: defaultRegion,
 				Options: longRegions,
 			},
 			Validate: survey.ComposeValidators(survey.Required, func(ans interface{}) error {
 				choice := regionTransform(ans).(core.OptionAnswer).Value
 				i := sort.SearchStrings(shortRegions, choice)
 				if i == len(shortRegions) || shortRegions[i] != choice {
-					return errors.Errorf("Invalid region %q", choice)
+					return fmt.Errorf("invalid region %q", choice)
 				}
 				return nil
 			}),
@@ -99,9 +105,11 @@ func GetRegion() (string, error) {
 }
 
 // GetZone prompts the user for a zone given a zone.
-func GetZone(region string) (string, error) {
+func GetZone(region string, defaultZone string) (string, error) {
 	zones := knownZones(region)
-	defaultZone := zones[0]
+	if len(defaultZone) == 0 {
+		defaultZone = zones[0]
+	}
 
 	var zoneTransform survey.Transformer = func(ans interface{}) interface{} {
 		switch v := ans.(type) {
@@ -126,7 +134,7 @@ func GetZone(region string) (string, error) {
 				choice := zoneTransform(ans).(core.OptionAnswer).Value
 				i := sort.SearchStrings(zones, choice)
 				if i == len(zones) || zones[i] != choice {
-					return errors.Errorf("Invalid zone %q", choice)
+					return fmt.Errorf("invalid zone %q", choice)
 				}
 				return nil
 			}),

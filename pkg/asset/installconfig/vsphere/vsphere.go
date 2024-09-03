@@ -15,9 +15,6 @@ import (
 	"github.com/vmware/govmomi/vim25"
 	"k8s.io/apimachinery/pkg/util/sets"
 
-	"github.com/openshift/installer/pkg/types"
-	"github.com/openshift/installer/pkg/types/defaults"
-	"github.com/openshift/installer/pkg/types/validation"
 	"github.com/openshift/installer/pkg/types/vsphere"
 	"github.com/openshift/installer/pkg/validate"
 )
@@ -274,7 +271,7 @@ func getDataStore(ctx context.Context, path string, finder Finder, client *vim25
 	}
 	if len(dataStores) == 1 {
 		logrus.Infof("Defaulting to only available datastore: %s", dataStores[0].InventoryPath)
-		return dataStores[0].Name(), nil
+		return dataStores[0].InventoryPath, nil
 	}
 
 	dataStoreChoices := make([]string, 0, len(dataStores))
@@ -365,14 +362,6 @@ func getNetwork(ctx context.Context, datacenter string, cluster string, finder F
 func getVIPs() (string, string, error) {
 	var apiVIP, ingressVIP string
 
-	defaultMachineNetwork := &types.Networking{
-		MachineNetwork: []types.MachineNetworkEntry{
-			{
-				CIDR: *defaults.DefaultMachineCIDR,
-			},
-		},
-	}
-
 	if err := survey.Ask([]*survey.Question{
 		{
 			Prompt: &survey.Input{
@@ -380,11 +369,7 @@ func getVIPs() (string, string, error) {
 				Help:    "The VIP to be used for the OpenShift API.",
 			},
 			Validate: survey.ComposeValidators(survey.Required, func(ans interface{}) error {
-				err := validate.IP((ans).(string))
-				if err != nil {
-					return err
-				}
-				return validation.ValidateIPinMachineCIDR((ans).(string), defaultMachineNetwork)
+				return validate.IP((ans).(string))
 			}),
 		},
 	}, &apiVIP); err != nil {
@@ -401,11 +386,7 @@ func getVIPs() (string, string, error) {
 				if apiVIP == (ans.(string)) {
 					return fmt.Errorf("%q should not be equal to the Virtual IP address for the API", ans.(string))
 				}
-				err := validate.IP((ans).(string))
-				if err != nil {
-					return err
-				}
-				return validation.ValidateIPinMachineCIDR((ans).(string), defaultMachineNetwork)
+				return validate.IP((ans).(string))
 			}),
 		},
 	}, &ingressVIP); err != nil {

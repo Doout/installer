@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/conns"
+	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/flex"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 
@@ -53,7 +54,12 @@ func DataSourceIbmIsDedicatedHost() *schema.Resource {
 							Computed:    true,
 							Description: "The VCPU architecture.",
 						},
-						"count": {
+						"manufacturer": &schema.Schema{
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "The VCPU manufacturer.",
+						},
+						"count": &schema.Schema{
 							Type:        schema.TypeInt,
 							Computed:    true,
 							Description: "The number of VCPUs assigned.",
@@ -244,6 +250,39 @@ func DataSourceIbmIsDedicatedHost() *schema.Resource {
 				Computed:    true,
 				Description: "The total amount of memory in gibibytes for this host.",
 			},
+			"numa": {
+				Type:        schema.TypeList,
+				Computed:    true,
+				Description: "The dedicated host NUMA configuration",
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"count": {
+							Type:        schema.TypeInt,
+							Computed:    true,
+							Description: "The total number of NUMA nodes for this dedicated host",
+						},
+						"nodes": {
+							Type:        schema.TypeList,
+							Computed:    true,
+							Description: "The NUMA nodes for this dedicated host.",
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									"available_vcpu": {
+										Type:        schema.TypeInt,
+										Computed:    true,
+										Description: "The available VCPU for this NUMA node.",
+									},
+									"vcpu": {
+										Type:        schema.TypeInt,
+										Computed:    true,
+										Description: "The total VCPU capacity for this NUMA node.",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
 			"profile": {
 				Type:        schema.TypeList,
 				Computed:    true,
@@ -313,7 +352,12 @@ func DataSourceIbmIsDedicatedHost() *schema.Resource {
 							Computed:    true,
 							Description: "The VCPU architecture.",
 						},
-						"count": {
+						"manufacturer": &schema.Schema{
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "The VCPU manufacturer.",
+						},
+						"count": &schema.Schema{
 							Type:        schema.TypeInt,
 							Computed:    true,
 							Description: "The number of VCPUs assigned.",
@@ -325,6 +369,13 @@ func DataSourceIbmIsDedicatedHost() *schema.Resource {
 				Type:        schema.TypeString,
 				Computed:    true,
 				Description: "The globally unique name of the zone this dedicated host resides in.",
+			},
+			isDedicatedHostAccessTags: {
+				Type:        schema.TypeSet,
+				Computed:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString},
+				Set:         flex.ResourceIBMVPCHash,
+				Description: "List of access tags",
 			},
 		},
 	}
@@ -342,120 +393,130 @@ func dataSourceIbmIsDedicatedHostRead(context context.Context, d *schema.Resourc
 		resgrpidstr := resgrpid.(string)
 		listDedicatedHostsOptions.ResourceGroupID = &resgrpidstr
 	}
+	name := d.Get("name").(string)
+	listDedicatedHostsOptions.Name = &name
 	dedicatedHostCollection, response, err := vpcClient.ListDedicatedHostsWithContext(context, listDedicatedHostsOptions)
 	if err != nil {
 		log.Printf("[DEBUG] ListDedicatedHostsWithContext failed %s\n%s", err, response)
 		return diag.FromErr(err)
 	}
-	name := d.Get("name").(string)
+
 	if len(dedicatedHostCollection.DedicatedHosts) != 0 {
 		dedicatedHost := vpcv1.DedicatedHost{}
-		for _, data := range dedicatedHostCollection.DedicatedHosts {
-			if *data.Name == name {
-				dedicatedHost = data
-				d.SetId(*dedicatedHost.ID)
 
-				if err = d.Set("available_memory", dedicatedHost.AvailableMemory); err != nil {
-					return diag.FromErr(fmt.Errorf("[ERROR] Error setting available_memory: %s", err))
-				}
+		dedicatedHost = dedicatedHostCollection.DedicatedHosts[0]
+		d.SetId(*dedicatedHost.ID)
 
-				if dedicatedHost.AvailableVcpu != nil {
-					err = d.Set("available_vcpu", dataSourceDedicatedHostFlattenAvailableVcpu(*dedicatedHost.AvailableVcpu))
-					if err != nil {
-						return diag.FromErr(fmt.Errorf("[ERROR] Error setting available_vcpu %s", err))
-					}
-				}
-				if err = d.Set("created_at", dedicatedHost.CreatedAt.String()); err != nil {
-					return diag.FromErr(fmt.Errorf("[ERROR] Error setting created_at: %s", err))
-				}
-				if err = d.Set("crn", dedicatedHost.CRN); err != nil {
-					return diag.FromErr(fmt.Errorf("[ERROR] Error setting crn: %s", err))
-				}
-				if dedicatedHost.Disks != nil {
-					err = d.Set("disks", dataSourceDedicatedHostFlattenDisks(dedicatedHost.Disks))
-					if err != nil {
-						return diag.FromErr(fmt.Errorf("[ERROR] Error setting disks %s", err))
-					}
-				}
-				if dedicatedHost.Group != nil {
-					err = d.Set("host_group", *dedicatedHost.Group.ID)
-					if err != nil {
-						return diag.FromErr(fmt.Errorf("[ERROR] Error setting group %s", err))
-					}
-				}
-				if err = d.Set("href", dedicatedHost.Href); err != nil {
-					return diag.FromErr(fmt.Errorf("[ERROR] Error setting href: %s", err))
-				}
-				if err = d.Set("instance_placement_enabled", dedicatedHost.InstancePlacementEnabled); err != nil {
-					return diag.FromErr(fmt.Errorf("[ERROR] Error setting instance_placement_enabled: %s", err))
-				}
+		if err = d.Set("available_memory", dedicatedHost.AvailableMemory); err != nil {
+			return diag.FromErr(fmt.Errorf("[ERROR] Error setting available_memory: %s", err))
+		}
 
-				if dedicatedHost.Instances != nil {
-					err = d.Set("instances", dataSourceDedicatedHostFlattenInstances(dedicatedHost.Instances))
-					if err != nil {
-						return diag.FromErr(fmt.Errorf("[ERROR] Error setting instances %s", err))
-					}
-				}
-				if err = d.Set("lifecycle_state", dedicatedHost.LifecycleState); err != nil {
-					return diag.FromErr(fmt.Errorf("[ERROR] Error setting lifecycle_state: %s", err))
-				}
-				if err = d.Set("memory", dedicatedHost.Memory); err != nil {
-					return diag.FromErr(fmt.Errorf("[ERROR] Error setting memory: %s", err))
-				}
-				if err = d.Set("name", dedicatedHost.Name); err != nil {
-					return diag.FromErr(fmt.Errorf("[ERROR] Error setting name: %s", err))
-				}
-
-				if dedicatedHost.Profile != nil {
-					err = d.Set("profile", dataSourceDedicatedHostFlattenProfile(*dedicatedHost.Profile))
-					if err != nil {
-						return diag.FromErr(fmt.Errorf("[ERROR] Error setting profile %s", err))
-					}
-				}
-				if err = d.Set("provisionable", dedicatedHost.Provisionable); err != nil {
-					return diag.FromErr(fmt.Errorf("[ERROR] Error setting provisionable: %s", err))
-				}
-
-				if dedicatedHost.ResourceGroup != nil {
-					err = d.Set("resource_group", *dedicatedHost.ResourceGroup.ID)
-					if err != nil {
-						return diag.FromErr(fmt.Errorf("[ERROR] Error setting resource_group %s", err))
-					}
-				}
-				if err = d.Set("resource_type", dedicatedHost.ResourceType); err != nil {
-					return diag.FromErr(fmt.Errorf("[ERROR] Error setting resource_type: %s", err))
-				}
-				if err = d.Set("socket_count", dedicatedHost.SocketCount); err != nil {
-					return diag.FromErr(fmt.Errorf("[ERROR] Error setting socket_count: %s", err))
-				}
-				if err = d.Set("state", dedicatedHost.State); err != nil {
-					return diag.FromErr(fmt.Errorf("[ERROR] Error setting state: %s", err))
-				}
-
-				if dedicatedHost.SupportedInstanceProfiles != nil {
-					err = d.Set("supported_instance_profiles", dataSourceDedicatedHostFlattenSupportedInstanceProfiles(dedicatedHost.SupportedInstanceProfiles))
-					if err != nil {
-						return diag.FromErr(fmt.Errorf("[ERROR] Error setting supported_instance_profiles %s", err))
-					}
-				}
-
-				if dedicatedHost.Vcpu != nil {
-					err = d.Set("vcpu", dataSourceDedicatedHostFlattenVcpu(*dedicatedHost.Vcpu))
-					if err != nil {
-						return diag.FromErr(fmt.Errorf("[ERROR] Error setting vcpu %s", err))
-					}
-				}
-
-				if dedicatedHost.Zone != nil {
-					err = d.Set("zone", *dedicatedHost.Zone.Name)
-					if err != nil {
-						return diag.FromErr(fmt.Errorf("[ERROR] Error setting zone %s", err))
-					}
-				}
-
-				return nil
+		if dedicatedHost.AvailableVcpu != nil {
+			err = d.Set("available_vcpu", dataSourceDedicatedHostFlattenAvailableVcpu(*dedicatedHost.AvailableVcpu))
+			if err != nil {
+				return diag.FromErr(fmt.Errorf("[ERROR] Error setting available_vcpu %s", err))
 			}
 		}
+		if err = d.Set("created_at", dedicatedHost.CreatedAt.String()); err != nil {
+			return diag.FromErr(fmt.Errorf("[ERROR] Error setting created_at: %s", err))
+		}
+		if err = d.Set("crn", dedicatedHost.CRN); err != nil {
+			return diag.FromErr(fmt.Errorf("[ERROR] Error setting crn: %s", err))
+		}
+		accesstags, err := flex.GetGlobalTagsUsingCRN(meta, *dedicatedHost.CRN, "", isDedicatedHostAccessTagType)
+		if err != nil {
+			log.Printf(
+				"Error on get of resource dedicated host (%s) access tags: %s", d.Id(), err)
+		}
+		d.Set(isDedicatedHostAccessTags, accesstags)
+		if dedicatedHost.Disks != nil {
+			err = d.Set("disks", dataSourceDedicatedHostFlattenDisks(dedicatedHost.Disks))
+			if err != nil {
+				return diag.FromErr(fmt.Errorf("[ERROR] Error setting disks %s", err))
+			}
+		}
+		if dedicatedHost.Group != nil {
+			err = d.Set("host_group", *dedicatedHost.Group.ID)
+			if err != nil {
+				return diag.FromErr(fmt.Errorf("[ERROR] Error setting group %s", err))
+			}
+		}
+		if err = d.Set("href", dedicatedHost.Href); err != nil {
+			return diag.FromErr(fmt.Errorf("[ERROR] Error setting href: %s", err))
+		}
+		if err = d.Set("instance_placement_enabled", dedicatedHost.InstancePlacementEnabled); err != nil {
+			return diag.FromErr(fmt.Errorf("[ERROR] Error setting instance_placement_enabled: %s", err))
+		}
+
+		if dedicatedHost.Instances != nil {
+			err = d.Set("instances", dataSourceDedicatedHostFlattenInstances(dedicatedHost.Instances))
+			if err != nil {
+				return diag.FromErr(fmt.Errorf("[ERROR] Error setting instances %s", err))
+			}
+		}
+		if err = d.Set("lifecycle_state", dedicatedHost.LifecycleState); err != nil {
+			return diag.FromErr(fmt.Errorf("[ERROR] Error setting lifecycle_state: %s", err))
+		}
+		if err = d.Set("memory", dedicatedHost.Memory); err != nil {
+			return diag.FromErr(fmt.Errorf("[ERROR] Error setting memory: %s", err))
+		}
+		if err = d.Set("name", dedicatedHost.Name); err != nil {
+			return diag.FromErr(fmt.Errorf("[ERROR] Error setting name: %s", err))
+		}
+		if dedicatedHost.Numa != nil {
+			if err = d.Set("numa", dataSourceDedicatedHostFlattenNumaNodes(*dedicatedHost.Numa)); err != nil {
+				return diag.FromErr(fmt.Errorf("[ERROR] Error setting numa nodes: %s", err))
+			}
+		}
+		if dedicatedHost.Profile != nil {
+			err = d.Set("profile", dataSourceDedicatedHostFlattenProfile(*dedicatedHost.Profile))
+			if err != nil {
+				return diag.FromErr(fmt.Errorf("[ERROR] Error setting profile %s", err))
+			}
+		}
+		if err = d.Set("provisionable", dedicatedHost.Provisionable); err != nil {
+			return diag.FromErr(fmt.Errorf("[ERROR] Error setting provisionable: %s", err))
+		}
+
+		if dedicatedHost.ResourceGroup != nil {
+			err = d.Set("resource_group", *dedicatedHost.ResourceGroup.ID)
+			if err != nil {
+				return diag.FromErr(fmt.Errorf("[ERROR] Error setting resource_group %s", err))
+			}
+		}
+		if err = d.Set("resource_type", dedicatedHost.ResourceType); err != nil {
+			return diag.FromErr(fmt.Errorf("[ERROR] Error setting resource_type: %s", err))
+		}
+		if err = d.Set("socket_count", dedicatedHost.SocketCount); err != nil {
+			return diag.FromErr(fmt.Errorf("[ERROR] Error setting socket_count: %s", err))
+		}
+		if err = d.Set("state", dedicatedHost.State); err != nil {
+			return diag.FromErr(fmt.Errorf("[ERROR] Error setting state: %s", err))
+		}
+
+		if dedicatedHost.SupportedInstanceProfiles != nil {
+			err = d.Set("supported_instance_profiles", dataSourceDedicatedHostFlattenSupportedInstanceProfiles(dedicatedHost.SupportedInstanceProfiles))
+			if err != nil {
+				return diag.FromErr(fmt.Errorf("[ERROR] Error setting supported_instance_profiles %s", err))
+			}
+		}
+
+		if dedicatedHost.Vcpu != nil {
+			err = d.Set("vcpu", dataSourceDedicatedHostFlattenVcpu(*dedicatedHost.Vcpu))
+			if err != nil {
+				return diag.FromErr(fmt.Errorf("[ERROR] Error setting vcpu %s", err))
+			}
+		}
+
+		if dedicatedHost.Zone != nil {
+			err = d.Set("zone", *dedicatedHost.Zone.Name)
+			if err != nil {
+				return diag.FromErr(fmt.Errorf("[ERROR] Error setting zone %s", err))
+			}
+		}
+
+		return nil
+
 	}
 	return diag.FromErr(fmt.Errorf("[ERROR] No Dedicated Host found with name %s", name))
 }
@@ -478,6 +539,10 @@ func dataSourceDedicatedHostAvailableVcpuToMap(availableVcpuItem vpcv1.Vcpu) (av
 
 	if availableVcpuItem.Architecture != nil {
 		availableVcpuMap["architecture"] = availableVcpuItem.Architecture
+	}
+	// Added AMD Support for the manufacturer.
+	if availableVcpuItem.Manufacturer != nil {
+		availableVcpuMap["manufacturer"] = availableVcpuItem.Manufacturer
 	}
 	if availableVcpuItem.Count != nil {
 		availableVcpuMap["count"] = availableVcpuItem.Count
@@ -575,6 +640,35 @@ func dataSourceDedicatedHostInstancesDeletedToMap(deletedItem vpcv1.InstanceRefe
 	return deletedMap
 }
 
+func dataSourceDedicatedHostFlattenNumaNodes(nodeItem vpcv1.DedicatedHostNuma) (numaNodes []map[string]interface{}) {
+	numaNodeMap := map[string]interface{}{}
+
+	if nodeItem.Count != nil {
+		numaNodeMap["count"] = *nodeItem.Count
+	}
+	if nodeItem.Nodes != nil {
+		nodesList := []map[string]interface{}{}
+		for _, nodeItem := range nodeItem.Nodes {
+			nodesList = append(nodesList, dataSourceDedicatedHostNodesToMap(nodeItem))
+		}
+		numaNodeMap["nodes"] = nodesList
+	}
+	numaNodes = append(numaNodes, numaNodeMap)
+	return numaNodes
+}
+
+func dataSourceDedicatedHostNodesToMap(nodes vpcv1.DedicatedHostNumaNode) (node map[string]interface{}) {
+	node = map[string]interface{}{}
+
+	if nodes.AvailableVcpu != nil {
+		node["available_vcpu"] = nodes.AvailableVcpu
+	}
+	if nodes.Vcpu != nil {
+		node["vcpu"] = nodes.Vcpu
+	}
+	return node
+}
+
 func dataSourceDedicatedHostFlattenProfile(result vpcv1.DedicatedHostProfileReference) (finalList []map[string]interface{}) {
 	finalList = []map[string]interface{}{}
 	finalMap := dataSourceDedicatedHostProfileToMap(result)
@@ -630,6 +724,10 @@ func dataSourceDedicatedHostVcpuToMap(vcpuItem vpcv1.Vcpu) (vcpuMap map[string]i
 
 	if vcpuItem.Architecture != nil {
 		vcpuMap["architecture"] = vcpuItem.Architecture
+	}
+	// Added AMD Support for the manufacturer.
+	if vcpuItem.Manufacturer != nil {
+		vcpuMap["manufacturer"] = vcpuItem.Manufacturer
 	}
 	if vcpuItem.Count != nil {
 		vcpuMap["count"] = vcpuItem.Count

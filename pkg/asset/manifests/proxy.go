@@ -1,21 +1,21 @@
 package manifests
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"path/filepath"
 	"strings"
 
-	"github.com/ghodss/yaml"
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"sigs.k8s.io/yaml"
 
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/installer/pkg/asset"
 	"github.com/openshift/installer/pkg/asset/installconfig"
 	"github.com/openshift/installer/pkg/types"
-	"github.com/openshift/installer/pkg/types/alibabacloud"
 	"github.com/openshift/installer/pkg/types/aws"
 	"github.com/openshift/installer/pkg/types/azure"
 	"github.com/openshift/installer/pkg/types/gcp"
@@ -47,7 +47,7 @@ func (*Proxy) Dependencies() []asset.Asset {
 }
 
 // Generate generates the Proxy config and its CRD.
-func (p *Proxy) Generate(dependencies asset.Parents) error {
+func (p *Proxy) Generate(_ context.Context, dependencies asset.Parents) error {
 	installConfig := &installconfig.InstallConfig{}
 	network := &Networking{}
 	dependencies.Get(installConfig, network)
@@ -142,8 +142,6 @@ func createNoProxy(installConfig *installconfig.InstallConfig, network *Networki
 	switch platform {
 	case aws.Name, gcp.Name, azure.Name, openstack.Name:
 		set.Insert("169.254.169.254")
-	case alibabacloud.Name:
-		set.Insert("100.100.100.200")
 	}
 
 	// TODO: Add support for additional cloud providers.

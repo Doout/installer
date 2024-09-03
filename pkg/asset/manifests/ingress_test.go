@@ -1,10 +1,11 @@
 package manifests
 
 import (
+	"context"
 	"testing"
 
-	"github.com/ghodss/yaml"
 	"github.com/stretchr/testify/assert"
+	"sigs.k8s.io/yaml"
 
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/installer/pkg/asset"
@@ -164,7 +165,7 @@ func TestGenerateIngerssDefaultPlacement(t *testing.T) {
 				),
 			)
 			ingressAsset := &Ingress{}
-			err := ingressAsset.Generate(parents)
+			err := ingressAsset.Generate(context.Background(), parents)
 			if !assert.NoError(t, err, "failed to generate asset") {
 				return
 			}

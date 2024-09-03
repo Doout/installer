@@ -56,7 +56,6 @@ func ResourceIBMCISTLSSettings() *schema.Resource {
 				Description:  "Minimum version of TLS required",
 				Optional:     true,
 				ValidateFunc: validate.InvokeValidator(ibmCISTLSSettings, cisTLSSettingsMinTLSVersion),
-				Default:      "1.1",
 			},
 		},
 		Create:   resourceCISTLSSettingsUpdate,
@@ -75,7 +74,7 @@ func ResourceIBMCISTLSSettingsValidator() *validate.ResourceValidator {
 			Identifier:                 "cis_id",
 			ValidateFunctionIdentifier: validate.ValidateCloudData,
 			Type:                       validate.TypeString,
-			CloudDataType:              "ResourceInstance",
+			CloudDataType:              "resource_instance",
 			CloudDataRange:             []string{"service:internet-svcs"},
 			Required:                   true})
 	validateSchema = append(validateSchema,

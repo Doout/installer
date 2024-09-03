@@ -1,6 +1,7 @@
 package manifests
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -11,12 +12,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
 
+	configv1 "github.com/openshift/api/config/v1"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
+	"github.com/openshift/assisted-service/models"
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
 	"github.com/openshift/installer/pkg/asset"
 	"github.com/openshift/installer/pkg/asset/agent"
+	"github.com/openshift/installer/pkg/asset/agent/agentconfig"
+	"github.com/openshift/installer/pkg/asset/agent/workflow"
 	"github.com/openshift/installer/pkg/asset/mock"
 	"github.com/openshift/installer/pkg/types"
+	externaltype "github.com/openshift/installer/pkg/types/external"
 )
 
 func TestAgentClusterInstall_Generate(t *testing.T) {
@@ -34,14 +40,93 @@ func TestAgentClusterInstall_Generate(t *testing.T) {
 	})
 
 	installConfigWithProxy := getValidOptionalInstallConfig()
-	installConfigWithProxy.Config.Proxy = (*types.Proxy)(getProxy(getProxyValidOptionalInstallConfig()))
+	installConfigWithProxy.Config.Proxy = (*types.Proxy)(getProxy(getProxyValidOptionalInstallConfig().Config.Proxy))
 
 	goodProxyACI := getGoodACI()
-	goodProxyACI.Spec.Proxy = (*hiveext.Proxy)(getProxy(getProxyValidOptionalInstallConfig()))
+	goodProxyACI.Spec.Proxy = (*hiveext.Proxy)(getProxy(getProxyValidOptionalInstallConfig().Config.Proxy))
 
 	goodACIDualStackVIPs := getGoodACIDualStack()
-	goodACIDualStackVIPs.SetAnnotations(map[string]string{
-		installConfigOverrides: `{"platform":{"baremetal":{"apiVIPs":["192.168.122.10","2001:db8:1111:2222:ffff:ffff:ffff:cafe"],"ingressVIPs":["192.168.122.11","2001:db8:1111:2222:ffff:ffff:ffff:dead"]}}}`,
+	goodACIDualStackVIPs.Spec.APIVIPs = []string{"192.168.122.10", "2001:db8:1111:2222:ffff:ffff:ffff:cafe"}
+	goodACIDualStackVIPs.Spec.IngressVIPs = []string{"192.168.122.11", "2001:db8:1111:2222:ffff:ffff:ffff:dead"}
+
+	installConfigWithCapabilities := getValidOptionalInstallConfig()
+	installConfigWithCapabilities.Config.Capabilities = &types.Capabilities{
+		BaselineCapabilitySet: configv1.ClusterVersionCapabilitySetNone,
+		AdditionalEnabledCapabilities: []configv1.ClusterVersionCapability{
+			configv1.ClusterVersionCapabilityMarketplace,
+		},
+	}
+
+	goodCapabilitiesACI := getGoodACI()
+	goodCapabilitiesACI.SetAnnotations(map[string]string{
+		installConfigOverrides: `{"capabilities":{"baselineCapabilitySet":"None","additionalEnabledCapabilities":["marketplace"]}}`,
+	})
+
+	installConfigWithNetworkOverride := getValidOptionalInstallConfig()
+	installConfigWithNetworkOverride.Config.Networking.NetworkType = "CustomNetworkType"
+
+	goodNetworkOverrideACI := getGoodACI()
+	goodNetworkOverrideACI.SetAnnotations(map[string]string{
+		installConfigOverrides: `{"networking":{"networkType":"CustomNetworkType","machineNetwork":[{"cidr":"10.10.11.0/24"}],"clusterNetwork":[{"cidr":"192.168.111.0/24","hostPrefix":23}],"serviceNetwork":["172.30.0.0/16"]}}`,
+	})
+
+	installConfigWithCPUPartitioning := getValidOptionalInstallConfig()
+	installConfigWithCPUPartitioning.Config.CPUPartitioning = types.CPUPartitioningAllNodes
+
+	goodCPUPartitioningACI := getGoodACI()
+	goodCPUPartitioningACI.SetAnnotations(map[string]string{
+		installConfigOverrides: `{"cpuPartitioningMode":"AllNodes"}`,
+	})
+
+	installConfigWExternalPlatform := getValidOptionalInstallConfig()
+	installConfigWExternalPlatform.Config.Platform = types.Platform{
+		External: &externaltype.Platform{
+			PlatformName:           "external",
+			CloudControllerManager: "",
+		},
+	}
+
+	goodExternalPlatformACI := getGoodACI()
+	goodExternalPlatformACI.Spec.APIVIPs = nil
+	goodExternalPlatformACI.Spec.IngressVIPs = nil
+	goodExternalPlatformACI.Spec.APIVIP = ""
+	goodExternalPlatformACI.Spec.IngressVIP = ""
+	val := true
+	goodExternalPlatformACI.Spec.Networking.UserManagedNetworking = &val
+	goodExternalPlatformACI.Spec.PlatformType = hiveext.ExternalPlatformType
+	goodExternalPlatformACI.Spec.ExternalPlatformSpec = &hiveext.ExternalPlatformSpec{
+		PlatformName: "external",
+	}
+	goodExternalPlatformACI.SetAnnotations(map[string]string{
+		installConfigOverrides: `{"platform":{"external":{"platformName":"external"}}}`,
+	})
+
+	installConfigWExternalOCIPlatform := getValidOptionalInstallConfig()
+	installConfigWExternalOCIPlatform.Config.Platform = types.Platform{
+		External: &externaltype.Platform{
+			PlatformName:           string(models.PlatformTypeOci),
+			CloudControllerManager: externaltype.CloudControllerManagerTypeExternal,
+		},
+	}
+
+	goodExternalOCIPlatformACI := getGoodACI()
+	val = true
+	goodExternalOCIPlatformACI.Spec.APIVIPs = nil
+	goodExternalOCIPlatformACI.Spec.IngressVIPs = nil
+	goodExternalOCIPlatformACI.Spec.APIVIP = ""
+	goodExternalOCIPlatformACI.Spec.IngressVIP = ""
+	goodExternalOCIPlatformACI.Spec.Networking.UserManagedNetworking = &val
+	goodExternalOCIPlatformACI.Spec.PlatformType = hiveext.ExternalPlatformType
+	goodExternalOCIPlatformACI.Spec.ExternalPlatformSpec = &hiveext.ExternalPlatformSpec{
+		PlatformName: string(models.PlatformTypeOci),
+	}
+	goodExternalOCIPlatformACI.SetAnnotations(map[string]string{
+		installConfigOverrides: `{"platform":{"external":{"platformName":"oci","cloudControllerManager":"External"}}}`,
+	})
+
+	goodBaremetalPlatformBMCACI := getGoodACI()
+	goodBaremetalPlatformBMCACI.SetAnnotations(map[string]string{
+		installConfigOverrides: `{"platform":{"baremetal":{"hosts":[{"name":"control-0.example.org","bmc":{"username":"bmc-user","password":"password","address":"172.22.0.10","disableCertificateVerification":true},"role":"master","bootMACAddress":"98:af:65:a5:8d:01","hardwareProfile":""},{"name":"control-1.example.org","bmc":{"username":"user2","password":"foo","address":"172.22.0.11","disableCertificateVerification":false},"role":"master","bootMACAddress":"98:af:65:a5:8d:02","hardwareProfile":""},{"name":"control-2.example.org","bmc":{"username":"admin","password":"bar","address":"172.22.0.12","disableCertificateVerification":true},"role":"master","bootMACAddress":"98:af:65:a5:8d:03","hardwareProfile":""}],"clusterProvisioningIP":"172.22.0.3","provisioningNetwork":"Managed","provisioningNetworkInterface":"eth0","provisioningNetworkCIDR":"172.22.0.0/24","provisioningDHCPRange":"172.22.0.10,172.22.0.254"}}}`,
 	})
 
 	cases := []struct {
@@ -53,51 +138,119 @@ func TestAgentClusterInstall_Generate(t *testing.T) {
 		{
 			name: "missing install config",
 			dependencies: []asset.Asset{
+				&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
 				&agent.OptionalInstallConfig{},
+				&agentconfig.AgentHosts{},
 			},
 			expectedError: "missing configuration or manifest file",
 		},
 		{
 			name: "valid configuration",
 			dependencies: []asset.Asset{
+				&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
 				getValidOptionalInstallConfig(),
+				&agentconfig.AgentHosts{},
 			},
 			expectedConfig: goodACI,
 		},
 		{
 			name: "valid configuration with unspecified network type should result with ACI having default network type",
 			dependencies: []asset.Asset{
+				&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
 				installConfigWithoutNetworkType,
+				&agentconfig.AgentHosts{},
 			},
 			expectedConfig: goodACI,
 		},
 		{
 			name: "valid configuration with FIPS annotation",
 			dependencies: []asset.Asset{
+				&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
 				installConfigWithFIPS,
+				&agentconfig.AgentHosts{},
 			},
 			expectedConfig: goodFIPSACI,
 		},
 		{
 			name: "valid configuration with proxy",
 			dependencies: []asset.Asset{
+				&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
 				installConfigWithProxy,
+				&agentconfig.AgentHosts{},
 			},
 			expectedConfig: goodProxyACI,
 		},
 		{
 			name: "valid configuration dual stack",
 			dependencies: []asset.Asset{
+				&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
 				getValidOptionalInstallConfigDualStack(),
+				&agentconfig.AgentHosts{},
 			},
 			expectedConfig: getGoodACIDualStack(),
 		},
 		{
 			name: "valid configuration dual stack dual vips",
 			dependencies: []asset.Asset{
+				&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
 				getValidOptionalInstallConfigDualStackDualVIPs(),
+				&agentconfig.AgentHosts{},
 			},
 			expectedConfig: goodACIDualStackVIPs,
+		},
+		{
+			name: "valid configuration with capabilities",
+			dependencies: []asset.Asset{
+				&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
+				installConfigWithCapabilities,
+				&agentconfig.AgentHosts{},
+			},
+			expectedConfig: goodCapabilitiesACI,
+		},
+		{
+			name: "valid configuration with custom network type",
+			dependencies: []asset.Asset{
+				&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
+				installConfigWithNetworkOverride,
+				&agentconfig.AgentHosts{},
+			},
+			expectedConfig: goodNetworkOverrideACI,
+		},
+		{
+			name: "valid configuration with CPU Partitioning",
+			dependencies: []asset.Asset{
+				&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
+				installConfigWithCPUPartitioning,
+				&agentconfig.AgentHosts{},
+			},
+			expectedConfig: goodCPUPartitioningACI,
+		},
+		{
+			name: "valid configuration external generic platform",
+			dependencies: []asset.Asset{
+				&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
+				installConfigWExternalPlatform,
+				&agentconfig.AgentHosts{},
+			},
+			expectedConfig: goodExternalPlatformACI,
+		},
+		{
+			name: "valid configuration external OCI platform",
+			dependencies: []asset.Asset{
+				&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
+				installConfigWExternalOCIPlatform,
+				&agentconfig.AgentHosts{},
+			},
+			expectedConfig: goodExternalOCIPlatformACI,
+		},
+		{
+			name: "valid configuration BMC and provisioning network",
+			dependencies: []asset.Asset{
+				&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
+				getValidOptionalInstallConfigWithProvisioning(),
+				getAgentHostsWithBMCConfig(),
+			},
+			expectedConfig: goodBaremetalPlatformBMCACI,
 		},
 	}
 	for _, tc := range cases {
@@ -107,7 +260,7 @@ func TestAgentClusterInstall_Generate(t *testing.T) {
 			parents.Add(tc.dependencies...)
 
 			asset := &AgentClusterInstall{}
-			err := asset.Generate(parents)
+			err := asset.Generate(context.Background(), parents)
 
 			if tc.expectedError != "" {
 				assert.Equal(t, tc.expectedError, err.Error())
@@ -201,6 +354,82 @@ spec:
 							"172.30.0.0/16",
 						},
 						NetworkType: "OVNKubernetes",
+					},
+					ProvisionRequirements: hiveext.ProvisionRequirements{
+						ControlPlaneAgents: 3,
+						WorkerAgents:       2,
+					},
+					SSHPublicKey: "ssh-rsa AAAAmyKey",
+				},
+			},
+			expectedError: "",
+		},
+		{
+			name: "valid-config-file-external-oci-platform",
+			data: `
+metadata:
+  name: test-agent-cluster-install
+  namespace: cluster0
+spec:
+  platformType: External
+  external:
+    platformName: oci
+  apiVIP: 192.168.111.5
+  ingressVIP: 192.168.111.4
+  clusterDeploymentRef:
+    name: ostest
+  imageSetRef:
+    name: openshift-v4.14.0
+  networking:
+    machineNetwork:
+    - cidr: 10.10.11.0/24
+    clusterNetwork:
+    - cidr: 10.128.0.0/14
+      hostPrefix: 23
+    serviceNetwork:
+    - 172.30.0.0/16
+    networkType: OVNKubernetes
+  provisionRequirements:
+    controlPlaneAgents: 3
+    workerAgents: 2
+  sshPublicKey: |
+    ssh-rsa AAAAmyKey`,
+			expectedFound: true,
+			expectedConfig: &hiveext.AgentClusterInstall{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-agent-cluster-install",
+					Namespace: "cluster0",
+				},
+				Spec: hiveext.AgentClusterInstallSpec{
+					APIVIP:       "192.168.111.5",
+					IngressVIP:   "192.168.111.4",
+					PlatformType: hiveext.ExternalPlatformType,
+					ExternalPlatformSpec: &hiveext.ExternalPlatformSpec{
+						PlatformName: string(models.PlatformTypeOci),
+					},
+					ClusterDeploymentRef: corev1.LocalObjectReference{
+						Name: "ostest",
+					},
+					ImageSetRef: &hivev1.ClusterImageSetReference{
+						Name: "openshift-v4.14.0",
+					},
+					Networking: hiveext.Networking{
+						MachineNetwork: []hiveext.MachineNetworkEntry{
+							{
+								CIDR: "10.10.11.0/24",
+							},
+						},
+						ClusterNetwork: []hiveext.ClusterNetworkEntry{
+							{
+								CIDR:       "10.128.0.0/14",
+								HostPrefix: 23,
+							},
+						},
+						ServiceNetwork: []string{
+							"172.30.0.0/16",
+						},
+						NetworkType:           "OVNKubernetes",
+						UserManagedNetworking: func(b bool) *bool { return &b }(true),
 					},
 					ProvisionRequirements: hiveext.ProvisionRequirements{
 						ControlPlaneAgents: 3,
@@ -574,7 +803,7 @@ spec:
   sshPublicKey: |
     ssh-rsa AAAAmyKey`,
 			expectedFound: false,
-			expectedError: "invalid PlatformType configured: spec.platformType: Unsupported value: \"aws\": supported values: \"BareMetal\", \"VSphere\", \"None\"",
+			expectedError: "invalid PlatformType configured: spec.platformType: Unsupported value: \"aws\": supported values: \"BareMetal\", \"VSphere\", \"None\", \"External\"",
 		},
 	}
 	for _, tc := range cases {

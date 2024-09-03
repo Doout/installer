@@ -2,12 +2,15 @@
 
 aliases:
   installer-team:
-    - AnnaZivkovic
+    - andfasano
     - barbacbd
+    - bfournie
     - jhixson74
     - patrickdillon
+    - pawanpinjarkar
     - r4f4
     - rna-afk
+    - rwsu
     - sadasu
   libvirt-approvers:
     - praveenkumar
@@ -18,7 +21,6 @@ aliases:
   openstack-approvers:
     - EmilienM
     - MaysaMacedo
-    - dulek
     - gryf
     - mandre
     - mdbooth
@@ -27,7 +29,6 @@ aliases:
   openstack-reviewers:
     - EmilienM
     - MaysaMacedo
-    - dulek
     - gryf
     - mandre
     - mdbooth
@@ -47,9 +48,12 @@ aliases:
     - jcpowermac
     - patrickdillon
     - rvanderp3
+    - vr4manta
   vsphere-reviewers:
     - jcpowermac
     - patrickdillon
+    - rvanderp3
+    - vr4manta
   baremetal-approvers:
     - dtantsur
     - elfosardo
@@ -108,12 +112,9 @@ aliases:
   coreos-approvers:
     - c4rt0
     - cgwalters
-    - bgilbert
     - dustymabe
     - mike-nguyen
     - jlebon
-    - ashcrow
-    - sohankunkerkar
     - travier
     - HuijingHei
     - jmarrero
@@ -124,15 +125,16 @@ aliases:
     - marmijo
     - RishabhSaini
     - Adam0Brien
+    - lukewarmtemp
+    - yasminvalim
+    - jbtrystram
+    - madhu-pillai
   coreos-reviewers:
     - c4rt0
     - cgwalters
-    - bgilbert
     - dustymabe
     - mike-nguyen
     - jlebon
-    - ashcrow
-    - sohankunkerkar
     - travier
     - HuijingHei
     - jmarrero
@@ -143,21 +145,29 @@ aliases:
     - marmijo
     - RishabhSaini
     - Adam0Brien
+    - lukewarmtemp
+    - yasminvalim
+    - jbtrystram
+    - madhu-pillai
   agent-reviewers:
     - andfasano
     - bfournie
-    - celebdor
-    - dhellmann
-    - lranjbar
     - pawanpinjarkar
     - rwsu
     - zaneb
   agent-approvers:
     - andfasano
     - bfournie
-    - celebdor
-    - dhellmann
-    - lranjbar
     - pawanpinjarkar
     - rwsu
+    - zaneb
+  imagebased-reviewers:
+    - eranco74
+    - javipolo
+    - mresvanis
+    - tsorya
+  imagebased-approvers:
+    - eranco74
+    - patrickdillon
+    - tsorya
     - zaneb

@@ -4,7 +4,14 @@
 source "issue_status.sh"
 
 inactive_services() {
-    local services="assisted-service.service create-cluster-and-infraenv.service apply-host-config.service start-cluster-installation.service"
+    local services="assisted-service.service agent-register-infraenv.service apply-host-config.service"
+    if [ ! -e "/etc/assisted/add-nodes.env" ]; then
+        # install workflow
+        services+=" agent-register-cluster.service start-cluster-installation.service"
+    else
+        # add nodes workflow
+        services+=" agent-import-cluster.service agent-add-node.service"
+    fi
     for s in ${services}; do
         if ! systemctl is-active "${s}" >/dev/null; then
             printf "%s " "${s}"
@@ -17,10 +24,7 @@ check_services() {
     local not_started
     not_started="$(inactive_services)"
     if [ -z "${not_started}" ]; then
-        if [ -f "${services_issue}" ]; then
-            rm "${services_issue}"
-            agetty --reload
-        fi
+        clear_issue "${services_issue}"
     else
         read -ra show_services <<<"${not_started}"
         {

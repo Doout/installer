@@ -58,6 +58,7 @@ func ResourceIBMPINetwork() *schema.Resource {
 			helpers.PINetworkDNS: {
 				Type:        schema.TypeSet,
 				Optional:    true,
+				Computed:    true,
 				Elem:        &schema.Schema{Type: schema.TypeString},
 				Description: "List of PI network DNS name",
 			},
@@ -74,10 +75,26 @@ func ResourceIBMPINetwork() *schema.Resource {
 				Description: "PI network gateway",
 			},
 			helpers.PINetworkJumbo: {
-				Type:        schema.TypeBool,
-				Optional:    true,
-				Computed:    true,
-				Description: "PI network enable MTU Jumbo option",
+				Type:         schema.TypeBool,
+				Optional:     true,
+				Computed:     true,
+				Deprecated:   "deprecated use pi_network_mtu instead",
+				ExactlyOneOf: []string{helpers.PINetworkMtu, helpers.PINetworkJumbo},
+				Description:  "PI network enable MTU Jumbo option",
+			},
+			helpers.PINetworkMtu: {
+				Type:         schema.TypeInt,
+				Optional:     true,
+				Computed:     true,
+				ExactlyOneOf: []string{helpers.PINetworkMtu, helpers.PINetworkJumbo},
+				Description:  "PI Maximum Transmission Unit",
+			},
+			helpers.PINetworkAccessConfig: {
+				Type:         schema.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: validate.ValidateAllowedStringValues([]string{"internal-only", "outbound-only", "bidirectional-static-route", "bidirectional-bgp", "bidirectional-l2out"}),
+				Description:  "PI network communication configuration",
 			},
 			helpers.PICloudInstanceId: {
 				Type:        schema.TypeString,
@@ -143,6 +160,13 @@ func resourceIBMPINetworkCreate(ctx context.Context, d *schema.ResourceData, met
 
 	if v, ok := d.GetOk(helpers.PINetworkJumbo); ok {
 		body.Jumbo = v.(bool)
+	}
+	if v, ok := d.GetOk(helpers.PINetworkMtu); ok {
+		var mtu int64 = int64(v.(int))
+		body.Mtu = &mtu
+	}
+	if v, ok := d.GetOk(helpers.PINetworkAccessConfig); ok {
+		body.AccessConfig = models.AccessConfig(v.(string))
 	}
 
 	if networktype == "vlan" {
@@ -215,6 +239,8 @@ func resourceIBMPINetworkRead(ctx context.Context, d *schema.ResourceData, meta 
 	d.Set(helpers.PINetworkName, networkdata.Name)
 	d.Set(helpers.PINetworkType, networkdata.Type)
 	d.Set(helpers.PINetworkJumbo, networkdata.Jumbo)
+	d.Set(helpers.PINetworkMtu, networkdata.Mtu)
+	d.Set(helpers.PINetworkAccessConfig, networkdata.AccessConfig)
 	d.Set(helpers.PINetworkGateway, networkdata.Gateway)
 	ipRangesMap := []map[string]interface{}{}
 	if networkdata.IPAddressRanges != nil {

@@ -3,12 +3,12 @@ package baremetal
 import (
 	"fmt"
 
-	"github.com/ghodss/yaml"
 	baremetalhost "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
-	"github.com/metal3-io/baremetal-operator/pkg/hardware"
+	hardware "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1/profile"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/yaml"
 
 	machineapi "github.com/openshift/api/machine/v1beta1"
 	"github.com/openshift/installer/pkg/types"
@@ -109,7 +109,7 @@ func createBaremetalHost(host *baremetal.Host, bmc baremetalhost.BMCDetails) bar
 
 // Hosts returns the HostSettings with details of the hardware being
 // used to construct the cluster.
-func Hosts(config *types.InstallConfig, machines []machineapi.Machine) (*HostSettings, error) {
+func Hosts(config *types.InstallConfig, machines []machineapi.Machine, userDataSecret string) (*HostSettings, error) {
 	settings := &HostSettings{}
 
 	if config.Platform.BareMetal == nil {
@@ -136,14 +136,17 @@ func Hosts(config *types.InstallConfig, machines []machineapi.Machine) (*HostSet
 		}
 
 		if !host.IsWorker() && numMasters < numRequiredMasters {
-			// Setting ExternallyProvisioned to true and adding a
-			// ConsumerRef without setting Image associates the host
-			// with a machine without triggering provisioning. We only
-			// want to do that for control plane hosts.
-			newHost.Spec.ExternallyProvisioned = true
-			// Pause reconciliation until we can annotate with the initial
-			// status containing the HardwareDetails
-			newHost.ObjectMeta.Annotations = map[string]string{"baremetalhost.metal3.io/paused": ""}
+			// Setting CustomDeploy early ensures that the
+			// corresponding Ironic node gets correctly configured
+			// from the beginning.
+			newHost.Spec.CustomDeploy = &baremetalhost.CustomDeploy{
+				Method: "install_coreos",
+			}
+
+			newHost.ObjectMeta.Labels = map[string]string{
+				"installer.openshift.io/role": "control-plane",
+			}
+
 			// Link the new host to the currently available machine
 			machine := machines[numMasters]
 			newHost.Spec.ConsumerRef = &corev1.ObjectReference{
@@ -153,7 +156,15 @@ func Hosts(config *types.InstallConfig, machines []machineapi.Machine) (*HostSet
 				Name:       machine.ObjectMeta.Name,
 			}
 			newHost.Spec.Online = true
+
+			// userDataSecret carries a reference to the master ignition file
+			newHost.Spec.UserData = &corev1.SecretReference{Name: userDataSecret}
 			numMasters++
+		} else {
+			// Pause workers until the real control plane is up.
+			newHost.ObjectMeta.Annotations = map[string]string{
+				"baremetalhost.metal3.io/paused": "",
+			}
 		}
 
 		settings.Hosts = append(settings.Hosts, newHost)

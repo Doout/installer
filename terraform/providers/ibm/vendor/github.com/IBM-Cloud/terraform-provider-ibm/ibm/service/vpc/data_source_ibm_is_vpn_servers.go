@@ -124,6 +124,31 @@ func DataSourceIBMIsVPNServers() *schema.Resource {
 							Computed:    true,
 							Description: "The health of this resource.- `ok`: Healthy- `degraded`: Suffering from compromised performance, capacity, or connectivity- `faulted`: Completely unreachable, inoperative, or otherwise entirely incapacitated- `inapplicable`: The health state does not apply because of the current lifecycle state. A resource with a lifecycle state of `failed` or `deleting` will have a health state of `inapplicable`. A `pending` resource may also have this state.",
 						},
+						"health_reasons": {
+							Type:     schema.TypeList,
+							Computed: true,
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									"code": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "A snake case string succinctly identifying the reason for this health state.",
+									},
+
+									"message": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "An explanation of the reason for this health state.",
+									},
+
+									"more_info": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "Link to documentation about the reason for this health state.",
+									},
+								},
+							},
+						},
 						"hostname": &schema.Schema{
 							Type:        schema.TypeString,
 							Computed:    true,
@@ -143,6 +168,32 @@ func DataSourceIBMIsVPNServers() *schema.Resource {
 							Type:        schema.TypeString,
 							Computed:    true,
 							Description: "The lifecycle state of the VPN server.",
+						},
+						"lifecycle_reasons": {
+							Type:        schema.TypeList,
+							Computed:    true,
+							Description: "The reasons for the current lifecycle_state (if any).",
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									"code": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "A snake case string succinctly identifying the reason for this lifecycle state.",
+									},
+
+									"message": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "An explanation of the reason for this lifecycle state.",
+									},
+
+									"more_info": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "Link to documentation about the reason for this lifecycle state.",
+									},
+								},
+							},
 						},
 						"name": &schema.Schema{
 							Type:        schema.TypeString,
@@ -370,6 +421,14 @@ func DataSourceIBMIsVPNServers() *schema.Resource {
 								},
 							},
 						},
+
+						isVPNServerAccessTags: {
+							Type:        schema.TypeSet,
+							Computed:    true,
+							Elem:        &schema.Schema{Type: schema.TypeString},
+							Set:         flex.ResourceIBMVPCHash,
+							Description: "List of access tags",
+						},
 					},
 				},
 			},
@@ -412,7 +471,7 @@ func dataSourceIBMIsVPNServersRead(context context.Context, d *schema.ResourceDa
 	d.SetId(dataSourceIBMIsVPNServersID(d))
 
 	if allrecs != nil {
-		err = d.Set("vpn_servers", dataSourceVPNServerCollectionFlattenVPNServers(allrecs))
+		err = d.Set("vpn_servers", dataSourceVPNServerCollectionFlattenVPNServers(allrecs, meta))
 		if err != nil {
 			return diag.FromErr(fmt.Errorf("[ERROR] Error setting vpn_servers %s", err))
 		}
@@ -462,15 +521,15 @@ func dataSourceVPNServerCollectionNextToMap(nextItem vpcv1.VPNServerCollectionNe
 	return nextMap
 }
 
-func dataSourceVPNServerCollectionFlattenVPNServers(result []vpcv1.VPNServer) (vpnServers []map[string]interface{}) {
+func dataSourceVPNServerCollectionFlattenVPNServers(result []vpcv1.VPNServer, meta interface{}) (vpnServers []map[string]interface{}) {
 	for _, vpnServersItem := range result {
-		vpnServers = append(vpnServers, dataSourceVPNServerCollectionVPNServersToMap(vpnServersItem))
+		vpnServers = append(vpnServers, dataSourceVPNServerCollectionVPNServersToMap(vpnServersItem, meta))
 	}
 
 	return vpnServers
 }
 
-func dataSourceVPNServerCollectionVPNServersToMap(vpnServersItem vpcv1.VPNServer) (vpnServersMap map[string]interface{}) {
+func dataSourceVPNServerCollectionVPNServersToMap(vpnServersItem vpcv1.VPNServer, meta interface{}) (vpnServersMap map[string]interface{}) {
 	vpnServersMap = map[string]interface{}{}
 
 	if vpnServersItem.Certificate != nil {
@@ -531,6 +590,9 @@ func dataSourceVPNServerCollectionVPNServersToMap(vpnServersItem vpcv1.VPNServer
 	if vpnServersItem.HealthState != nil {
 		vpnServersMap["health_state"] = vpnServersItem.HealthState
 	}
+	if vpnServersItem.HealthReasons != nil {
+		vpnServersMap["health_reasons"] = resourceVPNServerFlattenHealthReasons(vpnServersItem.HealthReasons)
+	}
 	if vpnServersItem.Hostname != nil {
 		vpnServersMap["hostname"] = vpnServersItem.Hostname
 	}
@@ -542,6 +604,9 @@ func dataSourceVPNServerCollectionVPNServersToMap(vpnServersItem vpcv1.VPNServer
 	}
 	if vpnServersItem.LifecycleState != nil {
 		vpnServersMap["lifecycle_state"] = vpnServersItem.LifecycleState
+	}
+	if vpnServersItem.LifecycleReasons != nil {
+		vpnServersMap["lifecycle_reasons"] = resourceVPNServerFlattenLifecycleReasons(vpnServersItem.LifecycleReasons)
 	}
 	if vpnServersItem.Name != nil {
 		vpnServersMap["name"] = vpnServersItem.Name
@@ -589,6 +654,13 @@ func dataSourceVPNServerCollectionVPNServersToMap(vpnServersItem vpcv1.VPNServer
 		// }
 		vpnServersMap["vpc"] = vpcList
 	}
+
+	accesstags, err := flex.GetGlobalTagsUsingCRN(meta, *vpnServersItem.CRN, "", isVPNServerAccessTagType)
+	if err != nil {
+		log.Printf(
+			"An error occured during reading of vpn server (%s) access tags: %s", *vpnServersItem.ID, err)
+	}
+	vpnServersMap[isVPNServerAccessTags] = accesstags
 
 	return vpnServersMap
 }

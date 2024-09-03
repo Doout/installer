@@ -1,6 +1,7 @@
 package image
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -21,8 +22,12 @@ import (
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
 	"github.com/openshift/installer/pkg/asset"
 	"github.com/openshift/installer/pkg/asset/agent/agentconfig"
+	"github.com/openshift/installer/pkg/asset/agent/common"
+	"github.com/openshift/installer/pkg/asset/agent/gencrypto"
+	"github.com/openshift/installer/pkg/asset/agent/joiner"
 	"github.com/openshift/installer/pkg/asset/agent/manifests"
 	"github.com/openshift/installer/pkg/asset/agent/mirror"
+	"github.com/openshift/installer/pkg/asset/agent/workflow"
 	"github.com/openshift/installer/pkg/asset/password"
 	"github.com/openshift/installer/pkg/asset/tls"
 	"github.com/openshift/installer/pkg/types/agent"
@@ -45,7 +50,6 @@ func TestIgnition_getTemplateData(t *testing.T) {
 		},
 	}
 	pullSecret := "pull-secret"
-	nodeZeroIP := "192.168.111.80"
 	agentClusterInstall := &hiveext.AgentClusterInstall{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-agent-cluster-install",
@@ -66,7 +70,7 @@ func TestIgnition_getTemplateData(t *testing.T) {
 	haveMirrorConfig := true
 	publicContainerRegistries := "quay.io,registry.ci.openshift.org"
 
-	releaseImageList, err := releaseImageList(clusterImageSet.Spec.ReleaseImage, "x86_64")
+	releaseImageList, err := releaseImageList(clusterImageSet.Spec.ReleaseImage, "x86_64", []string{"86_64"})
 	assert.NoError(t, err)
 
 	arch := "x86_64"
@@ -87,14 +91,12 @@ func TestIgnition_getTemplateData(t *testing.T) {
 	}
 	clusterName := "test-agent-cluster-install.test"
 
-	templateData := getTemplateData(clusterName, pullSecret, nodeZeroIP, releaseImageList, releaseImage, releaseImageMirror, haveMirrorConfig, publicContainerRegistries, agentClusterInstall, infraEnvID, osImage, proxy)
+	publicKey := "-----BEGIN EC PUBLIC KEY-----\nMHcCAQEEIOSCfDNmx0qe6dncV4tg==\n-----END EC PUBLIC KEY-----\n"
+	token := "someToken"
+	templateData := getTemplateData(clusterName, pullSecret, releaseImageList, releaseImage, releaseImageMirror, publicContainerRegistries, "minimal-iso", infraEnvID, publicKey, gencrypto.AuthType, token, "", "", haveMirrorConfig, agentClusterInstall.Spec.ProvisionRequirements.ControlPlaneAgents, agentClusterInstall.Spec.ProvisionRequirements.WorkerAgents, osImage, proxy)
 	assert.Equal(t, clusterName, templateData.ClusterName)
 	assert.Equal(t, "http", templateData.ServiceProtocol)
-	assert.Equal(t, "http://"+nodeZeroIP+":8090/", templateData.ServiceBaseURL)
 	assert.Equal(t, pullSecret, templateData.PullSecret)
-	assert.Equal(t, nodeZeroIP, templateData.NodeZeroIP)
-	assert.Equal(t, nodeZeroIP+":8090", templateData.AssistedServiceHost)
-	assert.Equal(t, agentClusterInstall.Spec.APIVIP, templateData.APIVIP)
 	assert.Equal(t, agentClusterInstall.Spec.ProvisionRequirements.ControlPlaneAgents, templateData.ControlPlaneAgents)
 	assert.Equal(t, agentClusterInstall.Spec.ProvisionRequirements.WorkerAgents, templateData.WorkerAgents)
 	assert.Equal(t, releaseImageList, templateData.ReleaseImages)
@@ -105,6 +107,19 @@ func TestIgnition_getTemplateData(t *testing.T) {
 	assert.Equal(t, infraEnvID, templateData.InfraEnvID)
 	assert.Equal(t, osImage, templateData.OSImage)
 	assert.Equal(t, proxy, templateData.Proxy)
+	assert.Equal(t, publicKey, templateData.PublicKeyPEM)
+	assert.Equal(t, gencrypto.AuthType, templateData.AuthType)
+	assert.Equal(t, token, templateData.Token)
+
+}
+
+func TestIgnition_getRendezvousHostEnv(t *testing.T) {
+	nodeZeroIP := "2001:db8::dead:beef"
+	token := "someToken"
+	rendezvousHostEnv := getRendezvousHostEnv("http", nodeZeroIP, token, workflow.AgentWorkflowTypeInstall)
+	assert.Equal(t,
+		"NODE_ZERO_IP="+nodeZeroIP+"\nSERVICE_BASE_URL=http://["+nodeZeroIP+"]:8090/\nIMAGE_SERVICE_BASE_URL=http://["+nodeZeroIP+"]:8888/\nAGENT_AUTH_TOKEN="+token+"\nPULL_SECRET_TOKEN="+token+"\nWORKFLOW_TYPE=install\n",
+		rendezvousHostEnv)
 }
 
 func TestIgnition_addStaticNetworkConfig(t *testing.T) {
@@ -152,7 +167,7 @@ func TestIgnition_addStaticNetworkConfig(t *testing.T) {
 					NetworkYaml: "interfaces:\n- ipv4:\n    address:\n    - ip: bad-ip\n      prefix-length: 24\n    enabled: true\n  mac-address: 52:54:01:aa:aa:a1\n  name: eth0\n  state: up\n  type: ethernet\n",
 				},
 			},
-			expectedError:    "'bad-ip' does not appear to be an IPv4 or IPv6 address",
+			expectedError:    ".*invalid IP address syntax",
 			expectedFileList: nil,
 		},
 	}
@@ -225,12 +240,42 @@ func TestRetrieveRendezvousIP(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "missing rendezvousIP in agent-config or at least one NMStateConfig manifest",
+			expectedError: "missing rendezvousIP in agent-config, at least one host networkConfig, or at least one NMStateConfig manifest",
+		},
+		{
+			Name: "non-canonical-ipv6-address",
+			agentConfig: &agent.Config{
+				RendezvousIP: "fd2e:6f44:5dd8:c956:0000:0000:0000:0050",
+				Hosts: []agent.Host{
+					{
+						Hostname: "control-0.example.org",
+						Role:     "master",
+					},
+				},
+			},
+			expectedRendezvousIP: "fd2e:6f44:5dd8:c956::50",
+		},
+		{
+			Name: "invalid-ipv6-address",
+			agentConfig: &agent.Config{
+				RendezvousIP: "fd2e:6f44:5dd8:c956::0000::0050",
+				Hosts: []agent.Host{
+					{
+						Hostname: "control-0.example.org",
+						Role:     "master",
+					},
+				},
+			},
+			expectedError: "invalid rendezvous IP: fd2e:6f44:5dd8:c956::0000::0050",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.Name, func(t *testing.T) {
-			rendezvousIP, err := RetrieveRendezvousIP(tc.agentConfig, tc.nmStateConfigs)
+			var hosts []agent.Host
+			if tc.agentConfig != nil {
+				hosts = tc.agentConfig.Hosts
+			}
+			rendezvousIP, err := RetrieveRendezvousIP(tc.agentConfig, hosts, tc.nmStateConfigs)
 			if tc.expectedError != "" {
 				assert.Regexp(t, tc.expectedError, err.Error())
 			} else {
@@ -239,23 +284,20 @@ func TestRetrieveRendezvousIP(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestAddHostConfig_Roles(t *testing.T) {
 	cases := []struct {
 		Name                            string
-		agentConfig                     *agentconfig.AgentConfig
+		agentHosts                      *agentconfig.AgentHosts
 		expectedNumberOfHostConfigFiles int
 	}{
 		{
 			Name: "one-host-role-defined",
-			agentConfig: &agentconfig.AgentConfig{
-				Config: &agent.Config{
-					Hosts: []agent.Host{
-						{
-							Role: "master",
-						},
+			agentHosts: &agentconfig.AgentHosts{
+				Hosts: []agent.Host{
+					{
+						Role: "master",
 					},
 				},
 			},
@@ -263,24 +305,22 @@ func TestAddHostConfig_Roles(t *testing.T) {
 		},
 		{
 			Name: "multiple-host-roles-defined",
-			agentConfig: &agentconfig.AgentConfig{
-				Config: &agent.Config{
-					Hosts: []agent.Host{
-						{
-							Role: "master",
-						},
-						{
-							Role: "master",
-						},
-						{
-							Role: "master",
-						},
-						{
-							Role: "worker",
-						},
-						{
-							Role: "worker",
-						},
+			agentHosts: &agentconfig.AgentHosts{
+				Hosts: []agent.Host{
+					{
+						Role: "master",
+					},
+					{
+						Role: "master",
+					},
+					{
+						Role: "master",
+					},
+					{
+						Role: "worker",
+					},
+					{
+						Role: "worker",
 					},
 				},
 			},
@@ -294,7 +334,7 @@ func TestAddHostConfig_Roles(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.Name, func(t *testing.T) {
 			config := &igntypes.Config{}
-			err := addHostConfig(config, tc.agentConfig)
+			err := addHostConfig(config, tc.agentHosts)
 			assert.NoError(t, err)
 			assert.Equal(t, len(config.Storage.Files), tc.expectedNumberOfHostConfigFiles)
 			for _, file := range config.Storage.Files {
@@ -303,18 +343,35 @@ func TestAddHostConfig_Roles(t *testing.T) {
 			}
 		})
 	}
-
 }
 
-func defaultGeneratedFiles() []string {
+func generatedFiles(otherFiles ...string) []string {
+	files := []string{
+		"/etc/assisted/rendezvous-host.env",
+		"/etc/assisted/manifests/agent-config.yaml",
+		// TODO: ZTP manifest files should also be present. Bug?
+		// "/etc/assisted/manifests/cluster-deployment.yaml",
+		// "/etc/assisted/manifests/agent-cluster-install.yaml",
+		// "/etc/assisted/manifests/pull-secret.yaml",
+		// "/etc/assisted/manifests/cluster-image-set.yaml",
+		// "/etc/assisted/manifests/infraenv.yaml",
+		"/etc/assisted/network/host0/eth0.nmconnection",
+		"/etc/assisted/network/host0/mac_interface.ini",
+		"/usr/local/bin/pre-network-manager-config.sh",
+		"/opt/agent/tls/kubeadmin-password.hash"}
+	files = append(files, otherFiles...)
+	return append(files, commonFiles()...)
+}
+
+func commonFiles() []string {
 	return []string{
 		"/etc/issue",
 		"/etc/multipath.conf",
 		"/etc/containers/containers.conf",
-		"/etc/motd",
+		"/etc/NetworkManager/conf.d/clientid.conf",
 		"/root/.docker/config.json",
 		"/root/assisted.te",
-		"/usr/local/bin/common.sh",
+		"/usr/local/bin/agent-config-image-wait.sh",
 		"/usr/local/bin/agent-gather",
 		"/usr/local/bin/extract-agent.sh",
 		"/usr/local/bin/get-container-images.sh",
@@ -325,44 +382,51 @@ func defaultGeneratedFiles() []string {
 		"/usr/local/bin/set-node-zero.sh",
 		"/usr/local/share/assisted-service/assisted-db.env",
 		"/usr/local/share/assisted-service/assisted-service.env",
+		"/usr/local/share/start-cluster/start-cluster.env",
 		"/usr/local/share/assisted-service/images.env",
 		"/usr/local/bin/bootstrap-service-record.sh",
 		"/usr/local/bin/release-image.sh",
 		"/usr/local/bin/release-image-download.sh",
-		"/etc/assisted/manifests/agent-config.yaml",
-		"/etc/assisted/network/host0/eth0.nmconnection",
-		"/etc/assisted/network/host0/mac_interface.ini",
-		"/usr/local/bin/pre-network-manager-config.sh",
-		"/opt/agent/tls/kubeadmin-password.hash",
+		"/etc/assisted/agent-installer.env",
+		"/etc/motd.d/10-agent-installer",
+		"/etc/systemd/system.conf.d/10-default-env.conf",
+		"/usr/local/bin/install-status.sh",
+		"/usr/local/bin/issue_status.sh",
+		"/usr/local/bin/load-config-iso.sh",
+		"/etc/udev/rules.d/80-agent-config-image.rules",
+		"/usr/local/bin/add-node.sh",
+		"/usr/local/bin/agent-auth-token-status.sh",
+		"/usr/local/bin/common.sh",
 	}
 }
 
 func TestIgnition_Generate(t *testing.T) {
-	// Generate calls addStaticNetworkConfig which calls nmstatectl
-	_, execErr := exec.LookPath("nmstatectl")
-	if execErr != nil {
-		t.Skip("No nmstatectl binary available")
-	}
+	skipTestIfnmstatectlIsMissing(t)
 
 	// This patch currently allows testing the Ignition asset using the embedded resources.
 	// TODO: Replace it by mocking the filesystem in bootstrap.AddStorageFiles()
-	workingDirectory, _ := os.Getwd()
-	os.Chdir(path.Join(workingDirectory, "../../../../data"))
-	secretDataBytes, _ := base64.StdEncoding.DecodeString("super-secret")
+	workingDirectory, err := os.Getwd()
+	assert.NoError(t, err)
+	err = os.Chdir(path.Join(workingDirectory, "../../../../data"))
+	assert.NoError(t, err)
+
+	secretDataBytes, err := base64.StdEncoding.DecodeString("c3VwZXItc2VjcmV0Cg==")
+	assert.NoError(t, err)
 
 	cases := []struct {
-		name                                  string
-		overrideDeps                          []asset.Asset
-		expectedError                         string
-		expectedFiles                         []string
-		expectedFileContent                   map[string]string
-		preNetworkManagerConfigServiceEnabled bool
+		name                string
+		overrideDeps        []asset.Asset
+		expectedError       string
+		expectedFiles       []string
+		expectedFileContent map[string]string
+		serviceEnabledMap   map[string]bool
 	}{
 		{
-			name:                                  "no-extra-manifests",
-			preNetworkManagerConfigServiceEnabled: true,
-
-			expectedFiles: defaultGeneratedFiles(),
+			name: "no-extra-manifests",
+			serviceEnabledMap: map[string]bool{
+				"pre-network-manager-config.service": true,
+				"agent-check-config-image.service":   false},
+			expectedFiles: generatedFiles(),
 		},
 		{
 			name: "default",
@@ -387,46 +451,21 @@ metadata:
 					},
 				},
 			},
-			expectedFiles: []string{
-				"/etc/issue",
-				"/etc/multipath.conf",
-				"/etc/containers/containers.conf",
-				"/etc/motd",
-				"/root/.docker/config.json",
-				"/root/assisted.te",
-				"/usr/local/bin/common.sh",
-				"/usr/local/bin/agent-gather",
-				"/usr/local/bin/agent-interactive-console.sh",
-				"/usr/local/bin/extract-agent.sh",
-				"/usr/local/bin/get-container-images.sh",
-				"/usr/local/bin/install-status.sh",
-				"/usr/local/bin/issue_status.sh",
-				"/usr/local/bin/set-hostname.sh",
-				"/usr/local/bin/start-agent.sh",
-				"/usr/local/bin/start-cluster-installation.sh",
-				"/usr/local/bin/wait-for-assisted-service.sh",
-				"/usr/local/bin/set-node-zero.sh",
-				"/usr/local/share/assisted-service/assisted-db.env",
-				"/usr/local/share/assisted-service/assisted-service.env",
-				"/usr/local/share/assisted-service/images.env",
-				"/usr/local/bin/bootstrap-service-record.sh",
-				"/usr/local/bin/release-image.sh",
-				"/usr/local/bin/release-image-download.sh",
-				"/etc/assisted/manifests/agent-config.yaml",
-				"/etc/assisted/network/host0/eth0.nmconnection",
-				"/etc/assisted/network/host0/mac_interface.ini",
-				"/usr/local/bin/pre-network-manager-config.sh",
-				"/opt/agent/tls/kubeadmin-password.hash",
-				"/etc/assisted/extra-manifests/test-configmap-0.yaml",
-				"/etc/assisted/extra-manifests/test-configmap-1.yaml",
-			},
+			expectedFiles: generatedFiles("/etc/assisted/extra-manifests/test-configmap-0.yaml", "/etc/assisted/extra-manifests/test-configmap-1.yaml"),
 			expectedFileContent: map[string]string{
-				"/usr/local/share/assisted-service/images.env": `ASSISTED_SERVICE_HOST=192.168.111.80:8090
-ASSISTED_SERVICE_SCHEME=http
-OS_IMAGES=\[\{"openshift_version":"was not built correctly","cpu_architecture":"x86_64","url":"https://rhcos.mirror.openshift.com/art/storage/releases/rhcos-.*.x86_64.iso","version":".*"\}\]
+				"/etc/assisted/extra-manifests/test-configmap-0.yaml": `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-test-1`,
+				"/etc/assisted/extra-manifests/test-configmap-1.yaml": `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-test-2
 `,
 			},
-			preNetworkManagerConfigServiceEnabled: true,
+			serviceEnabledMap: map[string]bool{
+				"pre-network-manager-config.service": true,
+				"agent-check-config-image.service":   false},
 		},
 		{
 			name: "no nmstateconfigs defined, pre-network-manager-config.service should not be enabled",
@@ -440,6 +479,12 @@ OS_IMAGES=\[\{"openshift_version":"was not built correctly","cpu_architecture":"
 					ClusterImageSet: &hivev1.ClusterImageSet{
 						Spec: hivev1.ClusterImageSetSpec{
 							ReleaseImage: "registry.ci.openshift.org/origin/release:4.11",
+						},
+					},
+					ClusterDeployment: &hivev1.ClusterDeployment{
+						Spec: hivev1.ClusterDeploymentSpec{
+							ClusterName: "ostest",
+							BaseDomain:  "ostest",
 						},
 					},
 					PullSecret: &v1.Secret{
@@ -458,28 +503,21 @@ OS_IMAGES=\[\{"openshift_version":"was not built correctly","cpu_architecture":"
 					},
 				},
 			},
-			preNetworkManagerConfigServiceEnabled: false,
+			serviceEnabledMap: map[string]bool{
+				"pre-network-manager-config.service": false},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			deps := buildIgnitionAssetDefaultDependencies(t)
 
-			deps := buildIgnitionAssetDefaultDependencies()
-
-			for _, od := range tc.overrideDeps {
-				for i, d := range deps {
-					if d.Name() == od.Name() {
-						deps[i] = od
-						break
-					}
-				}
-			}
+			overrideDeps(deps, tc.overrideDeps)
 
 			parents := asset.Parents{}
 			parents.Add(deps...)
 
 			ignitionAsset := &Ignition{}
-			err := ignitionAsset.Generate(parents)
+			err := ignitionAsset.Generate(context.Background(), parents)
 
 			if tc.expectedError != "" {
 				assert.Equal(t, tc.expectedError, err.Error())
@@ -489,51 +527,94 @@ OS_IMAGES=\[\{"openshift_version":"was not built correctly","cpu_architecture":"
 				assert.Len(t, ignitionAsset.Config.Storage.Directories, 1)
 				assert.Equal(t, "/etc/assisted/extra-manifests", ignitionAsset.Config.Storage.Directories[0].Node.Path)
 
-				if len(tc.expectedFiles) > 0 {
-					assert.Equal(t, len(tc.expectedFiles), len(ignitionAsset.Config.Storage.Files))
+				assertExpectedFiles(t, ignitionAsset.Config, tc.expectedFiles, tc.expectedFileContent)
 
-					for _, f := range tc.expectedFiles {
-						found := false
-						for _, i := range ignitionAsset.Config.Storage.Files {
-							if i.Node.Path == f {
-								if expectedData, ok := tc.expectedFileContent[i.Node.Path]; ok {
-									actualData, err := dataurl.DecodeString(*i.FileEmbedded1.Contents.Source)
-									assert.NoError(t, err)
-									assert.Regexp(t, expectedData, string(actualData.Data))
-								}
-
-								found = true
-								break
-							}
-						}
-						assert.True(t, found, fmt.Sprintf("Expected file %s not found", f))
-					}
-				}
-
-				for _, unit := range ignitionAsset.Config.Systemd.Units {
-					if unit.Name == "pre-network-manager-config.service" {
-						if unit.Enabled == nil {
-							assert.Equal(t, tc.preNetworkManagerConfigServiceEnabled, false)
-						} else {
-							assert.Equal(t, tc.preNetworkManagerConfigServiceEnabled, *unit.Enabled)
-						}
-					}
-				}
+				assertServiceEnabled(t, ignitionAsset.Config, tc.serviceEnabledMap)
 			}
 		})
 	}
 }
 
+func skipTestIfnmstatectlIsMissing(t *testing.T) {
+	t.Helper()
+	// Generate calls addStaticNetworkConfig which calls nmstatectl
+	_, execErr := exec.LookPath("nmstatectl")
+	if execErr != nil {
+		t.Skip("No nmstatectl binary available")
+	}
+}
+
+func overrideDeps(deps []asset.Asset, overrides []asset.Asset) {
+	for _, od := range overrides {
+		for i, d := range deps {
+			if d.Name() == od.Name() {
+				deps[i] = od
+				break
+			}
+		}
+	}
+}
+
+func assertServiceEnabled(t *testing.T, config *igntypes.Config, serviceEnabledMap map[string]bool) {
+	t.Helper()
+	for serviceName, enabled := range serviceEnabledMap {
+		for _, unit := range config.Systemd.Units {
+			if unit.Name == serviceName {
+				if unit.Enabled == nil {
+					assert.Equal(t, enabled, false)
+				} else {
+					assert.Equal(t, enabled, *unit.Enabled)
+				}
+			}
+		}
+	}
+}
+
+func assertExpectedFiles(t *testing.T, config *igntypes.Config, expectedFiles []string, expectedFileContent map[string]string) {
+	t.Helper()
+	if len(expectedFiles) > 0 {
+		assert.Equal(t, len(expectedFiles), len(config.Storage.Files))
+
+		for _, f := range expectedFiles {
+			found := false
+			for _, i := range config.Storage.Files {
+				if i.Node.Path == f {
+					if expectedData, ok := expectedFileContent[i.Node.Path]; ok {
+						actualData, err := dataurl.DecodeString(*i.FileEmbedded1.Contents.Source)
+						assert.NoError(t, err)
+						assert.Regexp(t, expectedData, string(actualData.Data))
+					}
+
+					found = true
+					break
+				}
+			}
+			assert.True(t, found, fmt.Sprintf("Expected file %s not found", f))
+		}
+	}
+}
+
 // This test util create the minimum valid set of dependencies for the
 // Ignition asset
-func buildIgnitionAssetDefaultDependencies() []asset.Asset {
-	secretDataBytes, _ := base64.StdEncoding.DecodeString("super-secret")
+func buildIgnitionAssetDefaultDependencies(t *testing.T) []asset.Asset {
+	t.Helper()
+	secretDataBytes, err := base64.StdEncoding.DecodeString("c3VwZXItc2VjcmV0Cg==")
+	assert.NoError(t, err)
 
 	return []asset.Asset{
+		&workflow.AgentWorkflow{Workflow: workflow.AgentWorkflowTypeInstall},
+		&joiner.ClusterInfo{},
+		&joiner.AddNodesConfig{},
 		&manifests.AgentManifests{
 			InfraEnv: &aiv1beta1.InfraEnv{
 				Spec: aiv1beta1.InfraEnvSpec{
 					SSHAuthorizedKey: "my-ssh-key",
+				},
+			},
+			ClusterDeployment: &hivev1.ClusterDeployment{
+				Spec: hivev1.ClusterDeploymentSpec{
+					ClusterName: "ostest",
+					BaseDomain:  "ostest",
 				},
 			},
 			ClusterImageSet: &hivev1.ClusterImageSet{
@@ -584,6 +665,7 @@ func buildIgnitionAssetDefaultDependencies() []asset.Asset {
 				Filename: "/cluster-manifests/agent-config.yaml",
 			},
 		},
+		&agentconfig.AgentHosts{},
 		&manifests.ExtraManifests{},
 		&mirror.RegistriesConf{},
 		&mirror.CaBundle{},
@@ -593,6 +675,8 @@ func buildIgnitionAssetDefaultDependencies() []asset.Asset {
 		&tls.KubeAPIServerServiceNetworkSignerCertKey{},
 		&tls.AdminKubeConfigSignerCertKey{},
 		&tls.AdminKubeConfigClientCertKey{},
+		&gencrypto.AuthConfig{},
+		&common.InfraEnvID{},
 	}
 }
 
@@ -669,10 +753,9 @@ func TestIgnition_getMirrorFromRelease(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 
-			mirror := getMirrorFromRelease(tc.release, &tc.registriesConf)
+			mirror := mirror.GetMirrorFromRelease(tc.release, &tc.registriesConf)
 
 			assert.Equal(t, tc.expectedMirror, mirror)
-
 		})
 	}
 }
@@ -752,7 +835,6 @@ func TestIgnition_getPublicContainerRegistries(t *testing.T) {
 			publicContainerRegistries := getPublicContainerRegistries(&tc.registriesConf)
 
 			assert.Equal(t, tc.expectedRegistries, publicContainerRegistries)
-
 		})
 	}
 }

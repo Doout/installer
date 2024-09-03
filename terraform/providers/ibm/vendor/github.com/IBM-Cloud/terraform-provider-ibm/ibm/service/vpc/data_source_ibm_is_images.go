@@ -5,6 +5,7 @@ package vpc
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/flex"
@@ -16,6 +17,7 @@ import (
 const (
 	isImages                = "images"
 	isImagesResourceGroupID = "resource_group"
+	isImageCatalogManaged   = "catalog_managed"
 )
 
 func DataSourceIBMISImages() *schema.Resource {
@@ -26,6 +28,11 @@ func DataSourceIBMISImages() *schema.Resource {
 			isImagesResourceGroupID: {
 				Type:        schema.TypeString,
 				Description: "The id of the resource group",
+				Optional:    true,
+			},
+			isImageCatalogManaged: {
+				Type:        schema.TypeBool,
+				Description: "Lists images managed as part of a catalog offering. If an image is managed, accounts in the same enterprise with access to that catalog can specify the image's catalog offering version CRN to provision virtual server instances using the image",
 				Optional:    true,
 			},
 			isImageName: {
@@ -67,10 +74,82 @@ func DataSourceIBMISImages() *schema.Resource {
 							Computed:    true,
 							Description: "The status of this image",
 						},
+						"status_reasons": &schema.Schema{
+							Type:        schema.TypeList,
+							Computed:    true,
+							Description: "The reasons for the current status (if any).",
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									"code": &schema.Schema{
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "A snake case string succinctly identifying the status reason.",
+									},
+									"message": &schema.Schema{
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "An explanation of the status reason.",
+									},
+									"more_info": &schema.Schema{
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "Link to documentation about this status reason.",
+									},
+								},
+							},
+						},
 						"visibility": {
 							Type:        schema.TypeString,
 							Computed:    true,
 							Description: "Whether the image is publicly visible or private to the account",
+						},
+						"operating_system": {
+							Type:     schema.TypeList,
+							Computed: true,
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									"architecture": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "The operating system architecture",
+									},
+									"dedicated_host_only": {
+										Type:        schema.TypeBool,
+										Computed:    true,
+										Description: "Images with this operating system can only be used on dedicated hosts or dedicated host groups",
+									},
+									"display_name": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "A unique, display-friendly name for the operating system",
+									},
+									"family": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "The software family for this operating system",
+									},
+									"href": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "The URL for this operating system",
+									},
+									"name": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "The globally unique name for this operating system",
+									},
+									"vendor": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "The vendor of the operating system",
+									},
+									"version": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "The major release version of this operating system",
+									},
+								},
+							},
 						},
 						"os": {
 							Type:        schema.TypeString,
@@ -81,6 +160,30 @@ func DataSourceIBMISImages() *schema.Resource {
 							Type:        schema.TypeString,
 							Computed:    true,
 							Description: "The operating system architecture",
+						},
+						"resource_group": {
+							Type:        schema.TypeList,
+							Computed:    true,
+							Description: "The resource group for this IPsec policy.",
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									"href": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "The URL for this resource group.",
+									},
+									"id": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "The unique identifier for this resource group.",
+									},
+									"name": {
+										Type:        schema.TypeString,
+										Computed:    true,
+										Description: "The user-defined name for this resource group.",
+									},
+								},
+							},
 						},
 						"crn": {
 							Type:        schema.TypeString,
@@ -106,6 +209,54 @@ func DataSourceIBMISImages() *schema.Resource {
 							Type:        schema.TypeString,
 							Computed:    true,
 							Description: "Source volume id of the image",
+						},
+						isImageCatalogOffering: {
+							Type:     schema.TypeList,
+							Computed: true,
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									isImageCatalogOfferingManaged: {
+										Type:        schema.TypeBool,
+										Computed:    true,
+										Description: "Indicates whether this image is managed as part of a catalog offering. A managed image can be provisioned using its catalog offering CRN or catalog offering version CRN.",
+									},
+									isImageCatalogOfferingVersion: {
+										Type:        schema.TypeList,
+										Computed:    true,
+										Description: "The catalog offering version associated with this image.",
+										Elem: &schema.Resource{
+											Schema: map[string]*schema.Schema{
+												isImageCatalogOfferingDeleted: {
+													Type:        schema.TypeList,
+													Computed:    true,
+													Description: "If present, this property indicates the referenced resource has been deleted and providessome supplementary information.",
+													Elem: &schema.Resource{
+														Schema: map[string]*schema.Schema{
+															isImageCatalogOfferingMoreInfo: {
+																Type:        schema.TypeString,
+																Computed:    true,
+																Description: "Link to documentation about deleted resources.",
+															},
+														},
+													},
+												},
+												isImageCatalogOfferingCrn: {
+													Type:        schema.TypeString,
+													Computed:    true,
+													Description: "The CRN for this version of the IBM Cloud catalog offering.",
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+						isImageAccessTags: {
+							Type:        schema.TypeSet,
+							Computed:    true,
+							Elem:        &schema.Schema{Type: schema.TypeString},
+							Set:         flex.ResourceIBMVPCHash,
+							Description: "List of access tags",
 						},
 					},
 				},
@@ -165,6 +316,10 @@ func imageList(d *schema.ResourceData, meta interface{}) error {
 	if v, ok := d.GetOk(isImageStatus); ok {
 		status = v.(string)
 	}
+	var catalogManaged bool
+	if v, ok := d.GetOk(isImageCatalogManaged); ok {
+		catalogManaged = v.(bool)
+	}
 
 	listImagesOptions := &vpcv1.ListImagesOptions{}
 	if resourceGroupID != "" {
@@ -202,6 +357,16 @@ func imageList(d *schema.ResourceData, meta interface{}) error {
 		allrecs = allrecsTemp
 	}
 
+	if catalogManaged {
+		allrecsTemp := []vpcv1.Image{}
+		for _, image := range allrecs {
+			if image.CatalogOffering != nil && catalogManaged == *image.CatalogOffering.Managed {
+				allrecsTemp = append(allrecsTemp, image)
+			}
+		}
+		allrecs = allrecsTemp
+	}
+
 	imagesInfo := make([]map[string]interface{}, 0)
 	for _, image := range allrecs {
 
@@ -213,6 +378,21 @@ func imageList(d *schema.ResourceData, meta interface{}) error {
 			"visibility":   *image.Visibility,
 			"os":           *image.OperatingSystem.Name,
 			"architecture": *image.OperatingSystem.Architecture,
+		}
+		if len(image.StatusReasons) > 0 {
+			l["status_reasons"] = dataSourceIBMIsImageFlattenStatusReasons(image.StatusReasons)
+		}
+		if image.ResourceGroup != nil {
+			resourceGroupList := []map[string]interface{}{}
+			resourceGroupMap := dataSourceImageResourceGroupToMap(*image.ResourceGroup)
+			resourceGroupList = append(resourceGroupList, resourceGroupMap)
+			l["resource_group"] = resourceGroupList
+		}
+		if image.OperatingSystem != nil {
+			operatingSystemList := []map[string]interface{}{}
+			operatingSystemMap := dataSourceIBMISImageOperatingSystemToMap(*image.OperatingSystem)
+			operatingSystemList = append(operatingSystemList, operatingSystemMap)
+			l["operating_system"] = operatingSystemList
 		}
 		if image.File != nil && image.File.Checksums != nil {
 			l[isImageCheckSum] = *image.File.Checksums.Sha256
@@ -226,9 +406,21 @@ func imageList(d *schema.ResourceData, meta interface{}) error {
 		if image.SourceVolume != nil {
 			l["source_volume"] = *image.SourceVolume.ID
 		}
+		if image.CatalogOffering != nil {
+			catalogOfferingList := []map[string]interface{}{}
+			catalogOfferingMap := dataSourceImageCollectionCatalogOfferingToMap(*image.CatalogOffering)
+			catalogOfferingList = append(catalogOfferingList, catalogOfferingMap)
+			l[isImageCatalogOffering] = catalogOfferingList
+		}
+		accesstags, err := flex.GetGlobalTagsUsingCRN(meta, *image.CRN, "", isImageAccessTagType)
+		if err != nil {
+			log.Printf(
+				"Error on get of resource image (%s) access tags: %s", d.Id(), err)
+		}
+		l[isImageAccessTags] = accesstags
 		imagesInfo = append(imagesInfo, l)
 	}
-	d.SetId(dataSourceIBMISSubnetsID(d))
+	d.SetId(dataSourceIBMISImagesID(d))
 	d.Set(isImages, imagesInfo)
 	return nil
 }

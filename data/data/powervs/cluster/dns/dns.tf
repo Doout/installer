@@ -71,7 +71,7 @@ resource "ibm_dns_resource_record" "proxy_vsi_record" {
   zone_id     = local.dns_zone.zone_id
   type        = "A"
   name        = "proxy.${var.cluster_domain}"
-  rdata       = ibm_is_instance.dns_vm_vsi[0].primary_network_interface[0].primary_ipv4_address
+  rdata       = ibm_is_instance.dns_vm_vsi[0].primary_network_interface[0].primary_ip[0].address
   ttl         = 60
 }
 
@@ -147,11 +147,15 @@ resource "ibm_is_security_group_rule" "dns_vm_sg_squid_all" {
   }
 }
 
-data "ibm_is_image" "dns_vm_image" {
-  count = local.proxy_count
-  name  = var.dns_vm_image_name
+data "ibm_is_images" "images" {
+  count  = local.proxy_count
+  status = "available"
 }
 
+data "ibm_is_image" "dns_vm_image" {
+  count = local.proxy_count
+  name  = [for image in data.ibm_is_images.images[0].images : image if startswith(image.os, var.dns_vm_image_os)][0].name
+}
 
 locals {
   dns_zone    = var.publish_strategy == "Internal" ? data.ibm_dns_zones.dns_zones[0].dns_zones[index(data.ibm_dns_zones.dns_zones[0].dns_zones.*.name, var.base_domain)] : null

@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
+
 	"github.com/spf13/cobra"
 
 	"github.com/openshift/installer/cmd/openshift-install/agent"
 	"github.com/openshift/installer/pkg/asset"
 	"github.com/openshift/installer/pkg/asset/agent/agentconfig"
+	"github.com/openshift/installer/pkg/asset/agent/configimage"
 	"github.com/openshift/installer/pkg/asset/agent/image"
 	"github.com/openshift/installer/pkg/asset/agent/manifests"
 	"github.com/openshift/installer/pkg/asset/agent/mirror"
@@ -13,7 +16,7 @@ import (
 	"github.com/openshift/installer/pkg/asset/password"
 )
 
-func newAgentCmd() *cobra.Command {
+func newAgentCmd(ctx context.Context) *cobra.Command {
 	agentCmd := &cobra.Command{
 		Use:   "agent",
 		Short: "Commands for supporting cluster installation using agent installer",
@@ -22,8 +25,9 @@ func newAgentCmd() *cobra.Command {
 		},
 	}
 
-	agentCmd.AddCommand(newAgentCreateCmd())
+	agentCmd.AddCommand(newAgentCreateCmd(ctx))
 	agentCmd.AddCommand(agent.NewWaitForCmd())
+	agentCmd.AddCommand(newAgentGraphCmd())
 	return agentCmd
 }
 
@@ -69,6 +73,20 @@ var (
 		},
 	}
 
+	agentConfigImageTarget = target{
+		name: "Agent Config Image",
+		command: &cobra.Command{
+			Use:   "config-image",
+			Short: "Generates an ISO containing configuration files only",
+			Args:  cobra.ExactArgs(0),
+		},
+		assets: []asset.WritableAsset{
+			&configimage.ConfigImage{},
+			&kubeconfig.AgentAdminClient{},
+			&password.KubeadminPassword{},
+		},
+	}
+
 	agentPXEFilesTarget = target{
 		name: "Agent PXE Files",
 		command: &cobra.Command{
@@ -83,15 +101,26 @@ var (
 		},
 	}
 
-	agentTargets = []target{agentConfigTarget, agentManifestsTarget, agentImageTarget, agentPXEFilesTarget}
+	agentUnconfiguredIgnitionTarget = target{
+		name: "Agent unconfigured ignition",
+		command: &cobra.Command{
+			Use:    "unconfigured-ignition",
+			Short:  "Generates an agent ignition that excludes cluster configuration",
+			Args:   cobra.ExactArgs(0),
+			Hidden: true,
+		},
+		assets: []asset.WritableAsset{
+			&image.UnconfiguredIgnition{},
+		},
+	}
+
+	agentTargets = []target{agentConfigTarget, agentManifestsTarget, agentImageTarget, agentPXEFilesTarget, agentConfigImageTarget, agentUnconfiguredIgnitionTarget}
 )
 
-func newAgentCreateCmd() *cobra.Command {
-
+func newAgentCreateCmd(ctx context.Context) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Commands for generating agent installation artifacts",
-		Args:  cobra.ExactArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
@@ -99,9 +128,23 @@ func newAgentCreateCmd() *cobra.Command {
 
 	for _, t := range agentTargets {
 		t.command.Args = cobra.ExactArgs(0)
-		t.command.Run = runTargetCmd(t.assets...)
+		t.command.Run = runTargetCmd(ctx, t.assets...)
 		cmd.AddCommand(t.command)
 	}
 
+	return cmd
+}
+
+func newAgentGraphCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "graph",
+		Short: "Outputs the internal dependency graph for the agent-based installer",
+		Long:  "",
+		Args:  cobra.ExactArgs(0),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runGraphCmd(cmd, args, agentTargets)
+		},
+	}
+	cmd.PersistentFlags().StringVar(&graphOpts.outputFile, "output-file", "", "file where the graph is written, if empty prints the graph to Stdout.")
 	return cmd
 }

@@ -34,15 +34,21 @@ variable "powervs_resource_group" {
   description = "The cloud instance resource group"
 }
 
-variable "powervs_cloud_instance_id" {
-  type        = string
-  description = "The cloud instance ID of your account"
-}
-
 variable "powervs_publish_strategy" {
   type        = string
   description = "The cluster publishing strategy, either Internal or External"
   default     = "External"
+}
+
+variable "powervs_service_instance_name" {
+  type        = string
+  description = "Optionally, the service instance name of an existing object before cluster creation"
+}
+
+variable "powervs_wait_for_workspace" {
+  type        = string
+  description = "The seconds wait for the Power VS Workspace after creation, default is 3m"
+  default     = "3m"
 }
 
 ################################################################
@@ -75,18 +81,6 @@ variable "powervs_wait_for_vpc" {
   default     = "60s"
 }
 
-variable "powervs_ccon_name" {
-  type        = string
-  description = "The name of a pre-created Power VS Cloud connection"
-  default     = ""
-}
-
-variable "powervs_network_name" {
-  type        = string
-  description = "The name of a pre-created Power VS DHCP network"
-  default     = ""
-}
-
 variable "powervs_vpc_name" {
   type        = string
   description = "The name of a pre-created IBM Cloud VPC. Must be in $powervs_vpc_region"
@@ -105,6 +99,11 @@ variable "powervs_vpc_gateway_attached" {
   default     = false
 }
 
+variable "powervs_tg_connection_vpc_id" {
+  type        = string
+  description = "ID of a VPC connection to the transit gateway specified in attached_transit_gateway, if any."
+}
+
 variable "powervs_vpc_gateway_name" {
   type        = string
   description = "The name of a pre-created VPC gateway. Must be in $powervs_vpc_region"
@@ -121,6 +120,18 @@ variable "powervs_enable_snat" {
   type        = bool
   description = "Boolean indicating if SNAT should be enabled or disabled."
   default     = true
+}
+
+variable "powervs_transit_gateway_enabled" {
+  type        = bool
+  description = "Boolean indicating if Transit Gateways should be used."
+  default     = false
+}
+
+variable "powervs_attached_transit_gateway" {
+  type        = string
+  description = "ID of already attached Transit Gateways."
+  default     = ""
 }
 
 ################################################################
@@ -209,6 +220,10 @@ variable "powervs_dns_guid" {
   type        = string
   description = "The GUID of the IBM DNS Service instance to use when creating a private cluster."
 }
+
+################################################################
+# Configure Tranit Gateways
+################################################################
 
 ################################################################
 # Output Variables

@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/arn"
@@ -16,6 +17,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // findEC2Instances returns the EC2 instances with tags that satisfy the filters.
@@ -23,7 +25,7 @@ import (
 // stage and the second list is the list of resources that are not terminated.
 //
 //	deleted - the resources that have already been deleted. Any resources specified in this set will be ignored.
-func findEC2Instances(ctx context.Context, ec2Client *ec2.EC2, deleted sets.String, filters []Filter, logger logrus.FieldLogger) ([]string, []string, error) {
+func findEC2Instances(ctx context.Context, ec2Client *ec2.EC2, deleted sets.Set[string], filters []Filter, logger logrus.FieldLogger) ([]string, []string, error) {
 	if ec2Client.Config.Region == nil {
 		return nil, nil, errors.New("EC2 client does not have region configured")
 	}
@@ -85,6 +87,42 @@ func findEC2Instances(ctx context.Context, ec2Client *ec2.EC2, deleted sets.Stri
 	return resourcesRunning, resourcesNotTerminated, nil
 }
 
+// DeleteEC2Instances terminates all EC2 instances found.
+func DeleteEC2Instances(ctx context.Context, logger logrus.FieldLogger, awsSession *session.Session, filters []Filter, toDelete sets.Set[string], deleted sets.Set[string], tracker *ErrorTracker) error {
+	ec2Client := ec2.New(awsSession)
+	lastTerminateTime := time.Now()
+	err := wait.PollUntilContextCancel(
+		ctx,
+		time.Second*10,
+		true,
+		func(ctx context.Context) (bool, error) {
+			instancesRunning, instancesNotTerminated, err := findEC2Instances(ctx, ec2Client, deleted, filters, logger)
+			if err != nil {
+				logger.WithError(err).Info("error while finding EC2 instances to delete")
+				return false, nil
+			}
+			if len(instancesNotTerminated) == 0 && len(instancesRunning) == 0 {
+				return true, nil
+			}
+			instancesToDelete := instancesRunning
+			if time.Since(lastTerminateTime) > 10*time.Minute {
+				instancesToDelete = instancesNotTerminated
+				lastTerminateTime = time.Now()
+			}
+			newlyDeleted, err := DeleteResources(ctx, logger, awsSession, instancesToDelete, tracker)
+			// Delete from the resources-to-delete set so that the current state of the resources to delete can be
+			// returned if the context is completed.
+			toDelete = toDelete.Difference(newlyDeleted)
+			deleted = deleted.Union(newlyDeleted)
+			if err != nil {
+				logger.WithError(err).Info("error while deleting EC2 instances")
+			}
+			return false, nil
+		},
+	)
+	return err
+}
+
 func deleteEC2(ctx context.Context, session *session.Session, arn arn.ARN, logger logrus.FieldLogger) error {
 	client := ec2.New(session)
 
@@ -92,7 +130,7 @@ func deleteEC2(ctx context.Context, session *session.Session, arn arn.ARN, logge
 	if err != nil {
 		return err
 	}
-	logger = logger.WithField("id", id)
+	logger = logger.WithField("id", id).WithField("resourceType", resourceType)
 
 	switch resourceType {
 	case "dhcp-options":
@@ -105,6 +143,8 @@ func deleteEC2(ctx context.Context, session *session.Session, arn arn.ARN, logge
 		return terminateEC2Instance(ctx, client, iam.New(session), id, logger)
 	case "internet-gateway":
 		return deleteEC2InternetGateway(ctx, client, id, logger)
+	case "carrier-gateway":
+		return deleteEC2CarrierGateway(ctx, client, id, logger)
 	case "natgateway":
 		return deleteEC2NATGateway(ctx, client, id, logger)
 	case "placement-group":
@@ -236,18 +276,6 @@ func terminateEC2InstanceByInstance(ctx context.Context, ec2Client *ec2.EC2, iam
 		return nil
 	}
 
-	if instance.IamInstanceProfile != nil {
-		parsed, err := arn.Parse(*instance.IamInstanceProfile.Arn)
-		if err != nil {
-			return errors.Wrap(err, "parse ARN for IAM instance profile")
-		}
-
-		err = deleteIAMInstanceProfile(ctx, iamClient, parsed, logger)
-		if err != nil {
-			return errors.Wrapf(err, "deleting %s", parsed.String())
-		}
-	}
-
 	_, err := ec2Client.TerminateInstancesWithContext(ctx, &ec2.TerminateInstancesInput{
 		InstanceIds: []*string{instance.InstanceId},
 	})
@@ -289,6 +317,22 @@ func deleteEC2InternetGateway(ctx context.Context, client *ec2.EC2, id string, l
 		InternetGatewayId: &id,
 	})
 	if err != nil {
+		return err
+	}
+
+	logger.Info("Deleted")
+	return nil
+}
+
+func deleteEC2CarrierGateway(ctx context.Context, client *ec2.EC2, id string, logger logrus.FieldLogger) error {
+	_, err := client.DeleteCarrierGatewayWithContext(ctx, &ec2.DeleteCarrierGatewayInput{
+		CarrierGatewayId: &id,
+	})
+	if err != nil {
+		var awsErr awserr.Error
+		if errors.As(err, &awsErr) && awsErr.Code() == "InvalidCarrierGatewayID.NotFound" {
+			return nil
+		}
 		return err
 	}
 
@@ -786,7 +830,40 @@ func deleteEC2VPCPeeringConnection(ctx context.Context, client *ec2.EC2, id stri
 }
 
 func deleteEC2VPCEndpointService(ctx context.Context, client *ec2.EC2, id string, logger logrus.FieldLogger) error {
-	_, err := client.DeleteVpcEndpointServiceConfigurationsWithContext(ctx, &ec2.DeleteVpcEndpointServiceConfigurationsInput{
+	output, err := client.DescribeVpcEndpointConnectionsWithContext(ctx, &ec2.DescribeVpcEndpointConnectionsInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("service-id"),
+				Values: aws.StringSlice([]string{id}),
+			},
+		},
+	})
+
+	if err != nil {
+		logger.Warn("Unable to get the list of VPC endpoint connections connected to service: ", err)
+		logger.Warn("Attempting to delete the VPC Endpoint Service")
+	} else {
+		endpointList := make([]*string, len(output.VpcEndpointConnections))
+		for _, endpoint := range output.VpcEndpointConnections {
+			if aws.StringValue(endpoint.VpcEndpointState) != "rejected" {
+				endpointList = append(endpointList, endpoint.VpcEndpointId)
+			}
+		}
+
+		_, err = client.RejectVpcEndpointConnectionsWithContext(ctx, &ec2.RejectVpcEndpointConnectionsInput{
+			ServiceId:      &id,
+			VpcEndpointIds: endpointList,
+		})
+
+		if err != nil {
+			logger.Warn("Unable to reject VPC endpoint connections for service: ", err)
+			logger.Warn("Attempting to delete the VPC Endpoint Service")
+		} else {
+			logger.WithField("resourceType", "VPC Endpoint Connection").Info("Rejected")
+		}
+	}
+
+	_, err = client.DeleteVpcEndpointServiceConfigurationsWithContext(ctx, &ec2.DeleteVpcEndpointServiceConfigurationsInput{
 		ServiceIds: aws.StringSlice([]string{id}),
 	})
 	if err != nil {

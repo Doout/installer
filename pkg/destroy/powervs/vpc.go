@@ -1,6 +1,8 @@
 package powervs
 
 import (
+	"context"
+	"fmt"
 	"math"
 	gohttp "net/http"
 	"strings"
@@ -8,7 +10,6 @@ import (
 
 	"github.com/IBM/go-sdk-core/v5/core"
 	"github.com/IBM/vpc-go-sdk/vpcv1"
-	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -32,7 +33,7 @@ func (o *ClusterUninstaller) listVPCs() (cloudResources, error) {
 	vpcs, _, err := o.vpcSvc.ListVpcs(options)
 
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to list vps")
+		return nil, fmt.Errorf("failed to list vps: %w", err)
 	}
 
 	var foundOne = false
@@ -105,7 +106,7 @@ func (o *ClusterUninstaller) deleteVPC(item cloudResource) error {
 	o.Logger.Debugf("deleteVPC: DeleteVPCWithContext returns %+v", deleteResponse)
 
 	if err != nil {
-		return errors.Wrapf(err, "failed to delete vpc %s", item.name)
+		return fmt.Errorf("failed to delete vpc %s: %w", item.name, err)
 	}
 
 	o.Logger.Infof("Deleted VPC %q", item.name)
@@ -144,7 +145,7 @@ func (o *ClusterUninstaller) destroyVPCs() error {
 			Factor:   1.1,
 			Cap:      leftInContext(ctx),
 			Steps:    math.MaxInt32}
-		err = wait.ExponentialBackoffWithContext(ctx, backoff, func() (bool, error) {
+		err = wait.ExponentialBackoffWithContext(ctx, backoff, func(context.Context) (bool, error) {
 			err2 := o.deleteVPC(item)
 			if err2 == nil {
 				return true, err2
@@ -161,7 +162,7 @@ func (o *ClusterUninstaller) destroyVPCs() error {
 		for _, item := range items {
 			o.Logger.Debugf("destroyVPCs: found %s in pending items", item.name)
 		}
-		return errors.Errorf("destroyVPCs: %d undeleted items pending", len(items))
+		return fmt.Errorf("destroyVPCs: %d undeleted items pending", len(items))
 	}
 
 	backoff := wait.Backoff{
@@ -169,7 +170,7 @@ func (o *ClusterUninstaller) destroyVPCs() error {
 		Factor:   1.1,
 		Cap:      leftInContext(ctx),
 		Steps:    math.MaxInt32}
-	err = wait.ExponentialBackoffWithContext(ctx, backoff, func() (bool, error) {
+	err = wait.ExponentialBackoffWithContext(ctx, backoff, func(context.Context) (bool, error) {
 		secondPassList, err2 := o.listVPCs()
 		if err2 != nil {
 			return false, err2

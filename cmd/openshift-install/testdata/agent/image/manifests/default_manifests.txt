@@ -44,6 +44,8 @@ metadata:
 rendezvousIP: 192.168.111.20
 
 -- expected/agent-cluster-install.yaml --
+apiVersion: extensions.hive.openshift.io/v1beta1
+kind: AgentClusterInstall
 metadata:
   creationTimestamp: null
   name: ostest
@@ -62,6 +64,7 @@ spec:
     networkType: OVNKubernetes
     serviceNetwork:
     - 172.30.0.0/16
+    userManagedNetworking: true
   platformType: None
   provisionRequirements:
     controlPlaneAgents: 1
@@ -73,7 +76,7 @@ status:
   progress:
     totalPercentage: 0
 -- expected/cluster-deployment.yaml --
-apiVersion: v1
+apiVersion: hive.openshift.io/v1
 kind: ClusterDeployment
 metadata:
   creationTimestamp: null
@@ -95,14 +98,18 @@ spec:
     name: ostest-pull-secret
 status: {}
 -- expected/cluster-image-set.yaml --
+apiVersion: hive.openshift.io/v1
+kind: ClusterImageSet
 metadata:
   creationTimestamp: null
   name: openshift-was not built correctly
   namespace: cluster0
 spec:
-  releaseImage: registry.ci.openshift.org/origin/release:4.13
+  releaseImage: $RELEASE_IMAGE
 status: {}
 -- expected/infraenv.yaml --
+apiVersion: agent-install.openshift.io/v1beta1
+kind: InfraEnv
 metadata:
   creationTimestamp: null
   name: ostest

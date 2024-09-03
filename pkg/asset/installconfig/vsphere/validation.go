@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/coreos/stream-metadata-go/stream"
 	"github.com/hashicorp/go-version"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/wait"
 
+	"github.com/openshift/installer/pkg/rhcos"
 	"github.com/openshift/installer/pkg/types"
 	"github.com/openshift/installer/pkg/types/vsphere"
 	"github.com/openshift/installer/pkg/types/vsphere/validation"
@@ -52,6 +53,7 @@ type validationContext struct {
 	TagManager          TagManager
 	regionTagCategoryID string
 	zoneTagCategoryID   string
+	rhcosStream         *stream.Stream
 }
 
 // Validate executes platform-specific validation.
@@ -125,6 +127,12 @@ func ValidateForProvisioning(ic *types.InstallConfig) error {
 				return err
 			}
 			defer cleanup()
+
+			err = getRhcosStream(validationCtx)
+			if err != nil {
+				return err
+			}
+
 			allErrs = append(allErrs, validateVCenterVersion(validationCtx, field.NewPath("platform").Child("vsphere").Child("vcenters"))...)
 			clients[failureDomain.Server] = validationCtx
 		}
@@ -165,49 +173,20 @@ func validateFailureDomain(validationCtx *validationContext, failureDomain *vsph
 		checkDatacenterPrivileges = false
 	}
 
-	computeCluster := failureDomain.Topology.ComputeCluster
-	clusterPathRegexp := regexp.MustCompile(`^/(.*?)/host/(.*?)$`)
-	clusterPathParts := clusterPathRegexp.FindStringSubmatch(computeCluster)
-	if len(clusterPathParts) < 3 {
-		return append(allErrs, field.Invalid(topologyField.Child("computeCluster"), computeCluster, "full path of cluster is required"))
-	}
-	computeClusterName := clusterPathParts[2]
-
-	allErrs = append(allErrs, validateESXiVersion(validationCtx, computeCluster, vsphereField, topologyField.Child("computeCluster"))...)
+	allErrs = append(allErrs, validateESXiVersion(validationCtx, failureDomain.Topology.ComputeCluster, vsphereField, topologyField.Child("computeCluster"))...)
 	allErrs = append(allErrs, validateVcenterPrivileges(validationCtx, topologyField.Child("server"))...)
-	allErrs = append(allErrs, computeClusterExists(validationCtx, computeCluster, topologyField.Child("computeCluster"), checkComputeClusterPrivileges, checkTags)...)
+	allErrs = append(allErrs, computeClusterExists(validationCtx, failureDomain.Topology.ComputeCluster, topologyField.Child("computeCluster"), checkComputeClusterPrivileges, checkTags)...)
 	allErrs = append(allErrs, datacenterExists(validationCtx, failureDomain.Topology.Datacenter, topologyField.Child("datacenter"), checkDatacenterPrivileges)...)
 	allErrs = append(allErrs, datastoreExists(validationCtx, failureDomain.Topology.Datacenter, failureDomain.Topology.Datastore, topologyField.Child("datastore"))...)
 
+	if failureDomain.Topology.Template != "" {
+		allErrs = append(allErrs, validateTemplate(validationCtx, failureDomain.Topology.Template, topologyField.Child("template"))...)
+	}
+
 	for _, network := range failureDomain.Topology.Networks {
-		allErrs = append(allErrs, validateNetwork(validationCtx, failureDomain.Topology.Datacenter, computeClusterName, network, topologyField)...)
+		allErrs = append(allErrs, validateNetwork(validationCtx, failureDomain.Topology.Datacenter, failureDomain.Topology.ComputeCluster, network, topologyField)...)
 	}
 
-	return allErrs
-}
-
-// folderExists returns an error if a folder is specified in the vSphere platform but a folder with that name is not found in the datacenter.
-func folderExists(validationCtx *validationContext, folderPath string, fldPath *field.Path) field.ErrorList {
-	allErrs := field.ErrorList{}
-	finder := validationCtx.Finder
-	// If no folder is specified, skip this check as the folder will be created.
-	if folderPath == "" {
-		return allErrs
-	}
-
-	ctx, cancel := context.WithTimeout(context.TODO(), 60*time.Second)
-	defer cancel()
-
-	folder, err := finder.Folder(ctx, folderPath)
-	if err != nil {
-		return append(allErrs, field.Invalid(fldPath, folderPath, err.Error()))
-	}
-	permissionGroup := permissions[permissionFolder]
-
-	err = comparePrivileges(ctx, validationCtx, folder.Reference(), permissionGroup)
-	if err != nil {
-		return append(allErrs, field.InternalError(fldPath, err))
-	}
 	return allErrs
 }
 
@@ -279,15 +258,24 @@ func validateESXiVersion(validationCtx *validationContext, clusterPath string, v
 	}
 
 	for _, h := range hosts {
+		var esxiHostVersion *version.Version
 		var mh mo.HostSystem
-		err := h.Properties(context.TODO(), h.Reference(), []string{"config.product"}, &mh)
+		err := h.Properties(context.TODO(), h.Reference(), []string{"config.product", "runtime"}, &mh)
 		if err != nil {
 			return append(allErrs, field.InternalError(vSphereFldPath, err))
 		}
 
-		esxiHostVersion, err := version.NewVersion(mh.Config.Product.Version)
-		if err != nil {
-			return append(allErrs, field.InternalError(vSphereFldPath, err))
+		if mh.Runtime.InMaintenanceMode || mh.Runtime.ConnectionState == vim25types.HostSystemConnectionStateDisconnected || mh.Runtime.ConnectionState == vim25types.HostSystemConnectionStateNotResponding {
+			continue
+		}
+
+		if mh.Config != nil {
+			esxiHostVersion, err = version.NewVersion(mh.Config.Product.Version)
+			if err != nil {
+				return append(allErrs, field.InternalError(vSphereFldPath, err))
+			}
+		} else {
+			return append(allErrs, field.InternalError(vSphereFldPath, errors.Errorf("vCenter is failing to retrieve config product version information for the ESXi host: %s", h.Name())))
 		}
 
 		detail := fmt.Sprintf("The vSphere storage driver requires a minimum of vSphere 7 Update 2. The ESXi host: %s is version: %s and build: %s",
@@ -632,4 +620,86 @@ func validateTagAttachment(validationCtx *validationContext, reference vim25type
 		errs = append(errs, fmt.Sprintf("tag associated with tag category %s not attached to this resource or ancestor", vsphere.TagCategoryZone))
 	}
 	return errors.New(strings.Join(errs, ","))
+}
+
+func validateTemplate(validationCtx *validationContext, template string, fldPath *field.Path) field.ErrorList {
+	ctx, cancel := context.WithTimeout(context.TODO(), 60*time.Second)
+	defer cancel()
+	var vmMo mo.VirtualMachine
+	var arch stream.Arch
+	var platformArtifacts stream.PlatformArtifacts
+	var ok bool
+
+	// Not using GetArchitectures() here to make it easier to test
+	if arch, ok = validationCtx.rhcosStream.Architectures["x86_64"]; !ok {
+		return field.ErrorList{field.InternalError(fldPath, errors.New("unable to find vmware rhcos artifacts"))}
+	}
+
+	if platformArtifacts, ok = arch.Artifacts["vmware"]; !ok {
+		return field.ErrorList{field.InternalError(fldPath, errors.New("unable to find vmware rhcos artifacts"))}
+	}
+	rhcosReleaseVersion := platformArtifacts.Release
+
+	vm, err := validationCtx.Finder.VirtualMachine(ctx, template)
+
+	if err != nil {
+		return field.ErrorList{field.Invalid(fldPath, template, errors.Wrapf(err, "unable to find template %s", template).Error())}
+	}
+	err = vm.Properties(ctx, vm.Reference(), nil, &vmMo)
+	if err != nil {
+		return field.ErrorList{field.InternalError(fldPath, err)}
+	}
+
+	if vmMo.Summary.Config.Product != nil {
+		templateProductVersion := vmMo.Summary.Config.Product.Version
+		if templateProductVersion == "" {
+			localLogger.Warnf("unable to determine RHCOS version of virtual machine: %s, installation may fail.", template)
+			return nil
+		}
+
+		err := compareCurrentToTemplate(templateProductVersion, rhcosReleaseVersion)
+		if err != nil {
+			return field.ErrorList{field.InternalError(fldPath, fmt.Errorf("current template: %s %w", template, err))}
+		}
+	} else {
+		localLogger.Warnf("unable to determine RHCOS version of virtual machine: %s, installation may fail.", template)
+	}
+
+	return nil
+}
+
+func compareCurrentToTemplate(templateProductVersion, rhcosStreamVersion string) error {
+	if templateProductVersion != rhcosStreamVersion {
+		templateVersion, err := strconv.Atoi(strings.Split(templateProductVersion, ".")[0])
+		if err != nil {
+			return err
+		}
+		currentRhcosVersion, err := strconv.Atoi(strings.Split(rhcosStreamVersion, ".")[0])
+		if err != nil {
+			return err
+		}
+
+		switch versionDiff := currentRhcosVersion - templateVersion; {
+		case versionDiff < 0:
+			return fmt.Errorf("rhcos version: %s is too many revisions ahead current version: %s", templateProductVersion, rhcosStreamVersion)
+		case versionDiff >= 2:
+			return fmt.Errorf("rhcos version: %s is too many revisions behind current version: %s", templateProductVersion, rhcosStreamVersion)
+		case versionDiff == 1:
+			localLogger.Warnf("rhcos version: %s is behind current version: %s, installation may fail", templateProductVersion, rhcosStreamVersion)
+		}
+	}
+	return nil
+}
+
+func getRhcosStream(validationCtx *validationContext) error {
+	var err error
+	ctx, cancel := context.WithTimeout(context.TODO(), 60*time.Second)
+	defer cancel()
+
+	validationCtx.rhcosStream, err = rhcos.FetchCoreOSBuild(ctx)
+
+	if err != nil {
+		return err
+	}
+	return nil
 }

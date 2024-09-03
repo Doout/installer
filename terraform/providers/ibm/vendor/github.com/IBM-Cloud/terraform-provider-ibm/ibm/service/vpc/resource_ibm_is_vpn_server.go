@@ -12,6 +12,7 @@ import (
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/flex"
 	"github.com/IBM-Cloud/terraform-provider-ibm/ibm/validate"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/customdiff"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 
@@ -27,6 +28,10 @@ const (
 
 	isVPNServerStatusDeleting = "deleting"
 	isVPNServerStatusDeleted  = "deleted"
+
+	isVPNServerAccessTags    = "access_tags"
+	isVPNServerUserTagType   = "user"
+	isVPNServerAccessTagType = "access"
 )
 
 func ResourceIBMIsVPNServer() *schema.Resource {
@@ -42,6 +47,13 @@ func ResourceIBMIsVPNServer() *schema.Resource {
 			Update: schema.DefaultTimeout(10 * time.Minute),
 			Delete: schema.DefaultTimeout(10 * time.Minute),
 		},
+
+		CustomizeDiff: customdiff.All(
+			customdiff.Sequence(
+				func(_ context.Context, diff *schema.ResourceDiff, v interface{}) error {
+					return flex.ResourceValidateAccessTags(diff, v)
+				}),
+		),
 
 		Schema: map[string]*schema.Schema{
 			"certificate_crn": &schema.Schema{
@@ -130,6 +142,31 @@ func ResourceIBMIsVPNServer() *schema.Resource {
 				Computed:    true,
 				Description: "The health of this resource.- `ok`: Healthy- `degraded`: Suffering from compromised performance, capacity, or connectivity- `faulted`: Completely unreachable, inoperative, or otherwise entirely incapacitated- `inapplicable`: The health state does not apply because of the current lifecycle state. A resource with a lifecycle state of `failed` or `deleting` will have a health state of `inapplicable`. A `pending` resource may also have this state.",
 			},
+			"health_reasons": {
+				Type:     schema.TypeList,
+				Computed: true,
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"code": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "A snake case string succinctly identifying the reason for this health state.",
+						},
+
+						"message": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "An explanation of the reason for this health state.",
+						},
+
+						"more_info": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "Link to documentation about the reason for this health state.",
+						},
+					},
+				},
+			},
 			"hostname": &schema.Schema{
 				Type:        schema.TypeString,
 				Computed:    true,
@@ -149,6 +186,32 @@ func ResourceIBMIsVPNServer() *schema.Resource {
 				Type:        schema.TypeString,
 				Computed:    true,
 				Description: "The lifecycle state of the VPN server.",
+			},
+			"lifecycle_reasons": {
+				Type:        schema.TypeList,
+				Computed:    true,
+				Description: "The reasons for the current lifecycle_state (if any).",
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"code": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "A snake case string succinctly identifying the reason for this lifecycle state.",
+						},
+
+						"message": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "An explanation of the reason for this lifecycle state.",
+						},
+
+						"more_info": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "Link to documentation about the reason for this lifecycle state.",
+						},
+					},
+				},
 			},
 			"name": &schema.Schema{
 				Type:         schema.TypeString,
@@ -301,9 +364,13 @@ func ResourceIBMIsVPNServer() *schema.Resource {
 				Description:  "The type of resource referenced.",
 			},
 
-			"version": &schema.Schema{
-				Type:     schema.TypeString,
-				Computed: true,
+			isVPNServerAccessTags: {
+				Type:        schema.TypeSet,
+				Optional:    true,
+				Computed:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString, ValidateFunc: validate.InvokeValidator("ibm_is_vpn_server", "accesstag")},
+				Set:         flex.ResourceIBMVPCHash,
+				Description: "List of access management tags",
 			},
 		},
 	}
@@ -356,7 +423,17 @@ func ResourceIBMIsVPNServerValidator() *validate.ResourceValidator {
 			ValidateFunctionIdentifier: validate.ValidateAllowedStringValue,
 			Type:                       validate.TypeString,
 			Required:                   true,
-			AllowedValues:              "certificate , username"},
+			AllowedValues:              "certificate , username",
+		},
+		validate.ValidateSchema{
+			Identifier:                 "accesstag",
+			ValidateFunctionIdentifier: validate.ValidateRegexpLen,
+			Type:                       validate.TypeString,
+			Optional:                   true,
+			Regexp:                     `^([A-Za-z0-9_.-]|[A-Za-z0-9_.-][A-Za-z0-9_ .-]*[A-Za-z0-9_.-]):([A-Za-z0-9_.-]|[A-Za-z0-9_.-][A-Za-z0-9_ .-]*[A-Za-z0-9_.-])$`,
+			MinValueLength:             1,
+			MaxValueLength:             128,
+		},
 	)
 
 	resourceValidator := validate.ResourceValidator{ResourceName: "ibm_is_vpn_server", Schema: validateSchema}
@@ -485,6 +562,15 @@ func resourceIBMIsVPNServerCreate(context context.Context, d *schema.ResourceDat
 	_, err = isWaitForVPNServerStable(context, sess, d, d.Timeout(schema.TimeoutCreate))
 	if err != nil {
 		return diag.FromErr(fmt.Errorf("[ERROR] VPNServer failed %s\n", err))
+	}
+
+	if _, ok := d.GetOk(isVPNServerAccessTags); ok {
+		oldList, newList := d.GetChange(isVPNServerAccessTags)
+		err = flex.UpdateGlobalTagsUsingCRN(oldList, newList, meta, *vpnServer.CRN, "", isVPNServerAccessTagType)
+		if err != nil {
+			log.Printf(
+				"Error on create of resource vpc (%s) access tags: %s", d.Id(), err)
+		}
 	}
 
 	return resourceIBMIsVPNServerRead(context, d, meta)
@@ -640,6 +726,11 @@ func resourceIBMIsVPNServerRead(context context.Context, d *schema.ResourceData,
 	if err = d.Set("health_state", vpnServer.HealthState); err != nil {
 		return diag.FromErr(fmt.Errorf("[ERROR] Error setting health_state: %s", err))
 	}
+	if vpnServer.HealthReasons != nil {
+		if err := d.Set("health_reasons", resourceVPNServerFlattenHealthReasons(vpnServer.HealthReasons)); err != nil {
+			return diag.FromErr(fmt.Errorf("[ERROR] Error setting health_reasons: %s", err))
+		}
+	}
 	if err = d.Set("hostname", vpnServer.Hostname); err != nil {
 		return diag.FromErr(fmt.Errorf("[ERROR] Error setting hostname: %s", err))
 	}
@@ -648,6 +739,11 @@ func resourceIBMIsVPNServerRead(context context.Context, d *schema.ResourceData,
 	}
 	if err = d.Set("lifecycle_state", vpnServer.LifecycleState); err != nil {
 		return diag.FromErr(fmt.Errorf("[ERROR] Error setting lifecycle_state: %s", err))
+	}
+	if vpnServer.LifecycleReasons != nil {
+		if err := d.Set("lifecycle_reasons", resourceVPNServerFlattenLifecycleReasons(vpnServer.LifecycleReasons)); err != nil {
+			return diag.FromErr(fmt.Errorf("[ERROR] Error setting lifecycle_reasons: %s", err))
+		}
 	}
 	privateIps := []map[string]interface{}{}
 	for _, privateIpsItem := range vpnServer.PrivateIps {
@@ -669,9 +765,12 @@ func resourceIBMIsVPNServerRead(context context.Context, d *schema.ResourceData,
 		return diag.FromErr(fmt.Errorf("[ERROR] Error setting resource_type: %s", err))
 	}
 
-	if err = d.Set("version", response.Headers.Get("Etag")); err != nil {
-		return diag.FromErr(fmt.Errorf("[ERROR] Error setting version: %s", err))
+	accesstags, err := flex.GetGlobalTagsUsingCRN(meta, *vpnServer.CRN, "", isVPNServerAccessTagType)
+	if err != nil {
+		log.Printf(
+			"Error on get of resource vpn server (%s) access tags: %s", d.Id(), err)
 	}
+	d.Set(isVPNServerAccessTags, accesstags)
 
 	return nil
 }
@@ -824,11 +923,9 @@ func resourceIBMIsVPNServerUpdate(context context.Context, d *schema.ResourceDat
 		hasChange = true
 	}
 
-	updateVPNServerOptions.SetIfMatch(d.Get("version").(string))
-
 	getVPNServerOptions := &vpcv1.GetVPNServerOptions{}
 	getVPNServerOptions.SetID(d.Id())
-	_, response, err := sess.GetVPNServerWithContext(context, getVPNServerOptions)
+	vpnServer, response, err := sess.GetVPNServerWithContext(context, getVPNServerOptions)
 	if err != nil {
 		if response != nil && response.StatusCode == 404 {
 			d.SetId("")
@@ -839,6 +936,14 @@ func resourceIBMIsVPNServerUpdate(context context.Context, d *schema.ResourceDat
 	}
 	eTag := response.Headers.Get("ETag") // Getting Etag from the response headers.
 
+	if d.HasChange(isVPNServerAccessTags) {
+		oldList, newList := d.GetChange(isVPNServerAccessTags)
+		err = flex.UpdateGlobalTagsUsingCRN(oldList, newList, meta, *vpnServer.CRN, "", isVPNServerAccessTagType)
+		if err != nil {
+			log.Printf(
+				"Error on update of resource vpn server (%s) access tags: %s", d.Id(), err)
+		}
+	}
 	// Upgrade or Downgrade of Subnet
 	if d.HasChange("subnets") {
 		var subnets []vpcv1.SubnetIdentityIntf
@@ -875,13 +980,24 @@ func resourceIBMIsVPNServerDelete(context context.Context, d *schema.ResourceDat
 	if err != nil {
 		return diag.FromErr(err)
 	}
+
+	getVPNServerOptions := &vpcv1.GetVPNServerOptions{}
+	getVPNServerOptions.SetID(d.Id())
+	_, response, err := sess.GetVPNServerWithContext(context, getVPNServerOptions)
+	if err != nil {
+		if response != nil && response.StatusCode == 404 {
+			d.SetId("")
+			return nil
+		}
+		log.Printf("[DEBUG] GetVPNServerWithContext failed %s\n%s", err, response)
+		return diag.FromErr(fmt.Errorf("[ERROR] GetVPNServerWithContext failed %s\n%s", err, response))
+	}
+	etag := response.Headers.Get("Etag")
 	deleteVPNServerOptions := &vpcv1.DeleteVPNServerOptions{}
-
 	deleteVPNServerOptions.SetID(d.Id())
+	deleteVPNServerOptions.SetIfMatch(etag)
 
-	deleteVPNServerOptions.SetIfMatch(d.Get("version").(string))
-
-	response, err := sess.DeleteVPNServerWithContext(context, deleteVPNServerOptions)
+	response, err = sess.DeleteVPNServerWithContext(context, deleteVPNServerOptions)
 	if err != nil {
 		log.Printf("[DEBUG] DeleteVPNServerWithContext failed %s\n%s", err, response)
 		return diag.FromErr(fmt.Errorf("[ERROR] DeleteVPNServerWithContext failed %s\n%s", err, response))
@@ -911,9 +1027,9 @@ func isWaitForVPNServerDeleted(context context.Context, sess *vpcv1.VpcV1, d *sc
 				if response != nil && response.StatusCode == 404 {
 					return vpnServer, isVPNServerStatusDeleted, nil
 				}
-				return vpnServer, isVPNServerStatusDeleting, fmt.Errorf("The VPC route %s failed to delete: %s\n%s", d.Id(), err, response)
+				return vpnServer, *vpnServer.LifecycleState, fmt.Errorf("The VPC vpn server %s failed to delete: %s\n%s", d.Id(), err, response)
 			}
-			return vpnServer, isVPNServerStatusDeleting, nil
+			return vpnServer, *vpnServer.LifecycleState, nil
 
 		},
 		Timeout:    d.Timeout(schema.TimeoutDelete),
@@ -922,4 +1038,36 @@ func isWaitForVPNServerDeleted(context context.Context, sess *vpcv1.VpcV1, d *sc
 	}
 
 	return stateConf.WaitForState()
+}
+
+func resourceVPNServerFlattenLifecycleReasons(lifecycleReasons []vpcv1.VPNServerLifecycleReason) (lifecycleReasonsList []map[string]interface{}) {
+	lifecycleReasonsList = make([]map[string]interface{}, 0)
+	for _, lr := range lifecycleReasons {
+		currentLR := map[string]interface{}{}
+		if lr.Code != nil && lr.Message != nil {
+			currentLR[isInstanceLifecycleReasonsCode] = *lr.Code
+			currentLR[isInstanceLifecycleReasonsMessage] = *lr.Message
+			if lr.MoreInfo != nil {
+				currentLR[isInstanceLifecycleReasonsMoreInfo] = *lr.MoreInfo
+			}
+			lifecycleReasonsList = append(lifecycleReasonsList, currentLR)
+		}
+	}
+	return lifecycleReasonsList
+}
+
+func resourceVPNServerFlattenHealthReasons(healthReasons []vpcv1.VPNServerHealthReason) (healthReasonsList []map[string]interface{}) {
+	healthReasonsList = make([]map[string]interface{}, 0)
+	for _, hr := range healthReasons {
+		currentHR := map[string]interface{}{}
+		if hr.Code != nil && hr.Message != nil {
+			currentHR[isVolumeHealthReasonsCode] = *hr.Code
+			currentHR[isVolumeHealthReasonsMessage] = *hr.Message
+			if hr.MoreInfo != nil {
+				currentHR[isVolumeHealthReasonsMoreInfo] = *hr.MoreInfo
+			}
+			healthReasonsList = append(healthReasonsList, currentHR)
+		}
+	}
+	return healthReasonsList
 }

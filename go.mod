@@ -27,18 +27,18 @@ require (
 	github.com/Azure/go-autorest/autorest/to v0.4.0
 	github.com/IBM-Cloud/bluemix-go v0.0.0-20211102075456-ffc4e11dfb16
 	github.com/IBM-Cloud/power-go-client v1.6.0
-	github.com/IBM/go-sdk-core/v5 v5.17.3
+	github.com/IBM/go-sdk-core/v5 v5.17.5
 	github.com/IBM/keyprotect-go-client v0.12.2
 	github.com/IBM/networking-go-sdk v0.45.0
-	github.com/IBM/platform-services-go-sdk v0.62.11
-	github.com/IBM/vpc-go-sdk v0.51.0
+	github.com/IBM/platform-services-go-sdk v0.69.0
+	github.com/IBM/vpc-go-sdk v0.57.0
 	github.com/apparentlymart/go-cidr v1.1.0
 	github.com/awalterschulze/gographviz v0.0.0-20190522210029-fa59802746ab
-	github.com/aws/aws-sdk-go v1.51.17
+	github.com/aws/aws-sdk-go v1.53.5
 	github.com/cavaliercoder/go-cpio v0.0.0-20180626203310-925f9528c45e
 	github.com/clarketm/json v1.14.1
 	github.com/containers/image/v5 v5.31.0
-	github.com/coreos/ignition/v2 v2.18.0
+	github.com/coreos/ignition/v2 v2.19.0
 	github.com/coreos/stream-metadata-go v0.1.8
 	github.com/daixiang0/gci v0.10.1
 	github.com/digitalocean/go-libvirt v0.0.0-20240220204746-fcabe97a6eed
@@ -69,23 +69,22 @@ require (
 	github.com/microsoftgraph/msgraph-sdk-go v0.59.0
 	github.com/nutanix-cloud-native/cluster-api-provider-nutanix v1.3.3-0.20240416171357-98239ba02cb2
 	github.com/nutanix-cloud-native/prism-go-client v0.3.4
-	github.com/onsi/gomega v1.33.1
-	github.com/openshift/api v0.0.0-20240809035623-d6942fb7294e
+	github.com/onsi/gomega v1.34.0
+	github.com/openshift/api v0.0.0-20240904015708-69df64132c91
 	github.com/openshift/assisted-image-service v0.0.0-20240607085136-02df2e56dde6
 	github.com/openshift/assisted-service/api v0.0.0
 	github.com/openshift/assisted-service/client v0.0.0
 	github.com/openshift/assisted-service/models v0.0.0
-	github.com/openshift/client-go v0.0.0-20240528061634-b054aa794d87
+	github.com/openshift/client-go v0.0.0-20240904134955-cd42fd3d7408
 	github.com/openshift/cloud-credential-operator v0.0.0-20240404165937-5e8812d64187
 	github.com/openshift/cluster-api-provider-baremetal v0.0.0-20220408122422-7a548effc26e
 	github.com/openshift/cluster-api-provider-libvirt v0.2.1-0.20230308152226-83c0473d4429
 	github.com/openshift/cluster-api-provider-ovirt v0.1.1-0.20220323121149-e3f2850dd519
 	github.com/openshift/hive/apis v0.0.0-20220222213051-def9088fdb5a
-	github.com/openshift/library-go v0.0.0-20240207105404-126b47137408
+	github.com/openshift/library-go v0.0.0-20240903143724-7c5c5d305ac1
 	github.com/openshift/machine-api-provider-gcp v0.0.1-0.20231014045125-6096cc86f3ba
 	github.com/openshift/machine-api-provider-ibmcloud v0.0.0-20231207164151-6b0b8ea7b16d
 	github.com/ovirt/go-ovirt v0.0.0-20210809163552-d4276e35d3db
-	github.com/pborman/uuid v1.2.0
 	github.com/pelletier/go-toml v1.9.5
 	github.com/pkg/diff v0.0.0-20210226163009-20ebb0f2a09e
 	github.com/pkg/errors v0.9.1
@@ -95,39 +94,39 @@ require (
 	github.com/rogpeppe/go-internal v1.12.0
 	github.com/shurcooL/vfsgen v0.0.0-20181202132449-6a9ea43bcacd
 	github.com/sirupsen/logrus v1.9.3
-	github.com/spf13/cobra v1.8.0
+	github.com/spf13/cobra v1.8.1
 	github.com/stretchr/testify v1.9.0
 	github.com/thedevsaddam/retry v0.0.0-20200324223450-9769a859cc6d
 	github.com/ulikunitz/xz v0.5.12
 	github.com/vincent-petithory/dataurl v1.0.0
 	github.com/vmware/govmomi v0.37.2
-	golang.org/x/crypto v0.25.0
+	golang.org/x/crypto v0.27.0
 	golang.org/x/oauth2 v0.21.0
-	golang.org/x/sync v0.7.0
-	golang.org/x/sys v0.22.0
-	golang.org/x/term v0.22.0
+	golang.org/x/sync v0.8.0
+	golang.org/x/sys v0.25.0
+	golang.org/x/term v0.24.0
 	google.golang.org/api v0.189.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20240711142825-46eb208f015d
 	google.golang.org/grpc v1.65.0
 	gopkg.in/ini.v1 v1.67.0
 	gopkg.in/yaml.v2 v2.4.0
-	k8s.io/api v0.30.1
-	k8s.io/apiextensions-apiserver v0.30.1
-	k8s.io/apimachinery v0.30.1
-	k8s.io/client-go v0.30.1
+	k8s.io/api v0.30.3
+	k8s.io/apiextensions-apiserver v0.30.3
+	k8s.io/apimachinery v0.30.3
+	k8s.io/client-go v0.30.3
 	k8s.io/cloud-provider-vsphere v1.30.1
 	k8s.io/klog v1.0.0
 	k8s.io/klog/v2 v2.120.1
 	k8s.io/utils v0.0.0-20240310230437-4693a0247e57
 	libvirt.org/go/libvirtxml v1.10002.0
-	sigs.k8s.io/cluster-api v1.7.3
-	sigs.k8s.io/cluster-api-provider-aws/v2 v2.6.1
+	sigs.k8s.io/cluster-api v1.8.2
+	sigs.k8s.io/cluster-api-provider-aws/v2 v2.6.1-0.20240910142813-3f3ce5610204
 	sigs.k8s.io/cluster-api-provider-azure v1.15.1-0.20240617212811-a52056dfb88c
 	sigs.k8s.io/cluster-api-provider-gcp v1.7.1-0.20240724153512-c3b8b533143c
 	sigs.k8s.io/cluster-api-provider-ibmcloud v0.7.0
 	sigs.k8s.io/cluster-api-provider-openstack v0.10.3
-	sigs.k8s.io/cluster-api-provider-vsphere v1.9.3
-	sigs.k8s.io/controller-runtime v0.18.3
+	sigs.k8s.io/cluster-api-provider-vsphere v1.10.2
+	sigs.k8s.io/controller-runtime v0.18.5
 	sigs.k8s.io/controller-tools v0.12.0
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd
 	sigs.k8s.io/yaml v1.4.0
@@ -149,7 +148,7 @@ require (
 	github.com/Azure/go-autorest/logger v0.2.1 // indirect
 	github.com/Azure/go-autorest/tracing v0.6.0 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.2.2 // indirect
-	github.com/BurntSushi/toml v1.3.2 // indirect
+	github.com/BurntSushi/toml v1.4.0 // indirect
 	github.com/MakeNowJust/heredoc v1.0.0 // indirect
 	github.com/PaesslerAG/gval v1.0.0 // indirect
 	github.com/PaesslerAG/jsonpath v0.1.1 // indirect
@@ -169,11 +168,11 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dougm/pretty v0.0.0-20171025230240-2ee9d7453c02 // indirect
 	github.com/elliotwutingfeng/asciiset v0.0.0-20230602022725-51bbb787efab // indirect
-	github.com/emicklei/go-restful/v3 v3.12.0 // indirect
+	github.com/emicklei/go-restful/v3 v3.12.1 // indirect
 	github.com/evanphx/json-patch v5.9.0+incompatible // indirect
 	github.com/evanphx/json-patch/v5 v5.9.0 // indirect
 	github.com/exponent-io/jsonpath v0.0.0-20151013193312-d6023ce2651d // indirect
-	github.com/fatih/color v1.16.0 // indirect
+	github.com/fatih/color v1.17.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.3 // indirect
@@ -254,6 +253,7 @@ require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/xattr v0.4.9 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+	github.com/ppc64le-cloud/powervs-utils v0.0.0-20240610070307-1c0d75a5c247 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/procfs v0.13.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
@@ -272,11 +272,11 @@ require (
 	go.opentelemetry.io/otel/trace v1.24.0 // indirect
 	go.starlark.net v0.0.0-20230525235612-a134d8f9ddca // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/zap v1.26.0 // indirect
+	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
 	golang.org/x/mod v0.19.0 // indirect
-	golang.org/x/net v0.27.0 // indirect
-	golang.org/x/text v0.16.0 // indirect
+	golang.org/x/net v0.29.0 // indirect
+	golang.org/x/text v0.18.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
 	golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d // indirect
 	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
@@ -284,19 +284,19 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240722135656-d784300faade // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/djherbis/times.v1 v1.3.0 // indirect
-	gopkg.in/evanphx/json-patch.v5 v5.6.0 // indirect
+	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
 	gopkg.in/gcfg.v1 v1.2.3 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gorm.io/gorm v1.24.5 // indirect
-	k8s.io/cli-runtime v0.30.1 // indirect
-	k8s.io/cluster-bootstrap v0.30.1 // indirect
-	k8s.io/component-base v0.30.1 // indirect
+	k8s.io/cli-runtime v0.30.3 // indirect
+	k8s.io/cluster-bootstrap v0.30.3 // indirect
+	k8s.io/component-base v0.30.3 // indirect
 	k8s.io/kube-openapi v0.0.0-20240228011516-70dd3763d340 // indirect
-	k8s.io/kubectl v0.30.1 // indirect
-	sigs.k8s.io/kustomize/api v0.16.0 // indirect
-	sigs.k8s.io/kustomize/kyaml v0.16.0 // indirect
+	k8s.io/kubectl v0.30.3 // indirect
+	sigs.k8s.io/kustomize/api v0.17.1 // indirect
+	sigs.k8s.io/kustomize/kyaml v0.17.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
 )
 
@@ -305,12 +305,12 @@ replace (
 	github.com/metal3-io/baremetal-operator => github.com/openshift/baremetal-operator v0.0.0-20231128154154-6736c9b9c6c8
 	github.com/metal3-io/baremetal-operator/apis => github.com/openshift/baremetal-operator/apis v0.0.0-20231128154154-6736c9b9c6c8
 	github.com/metal3-io/baremetal-operator/pkg/hardwareutils => github.com/openshift/baremetal-operator/pkg/hardwareutils v0.0.0-20231128154154-6736c9b9c6c8
-	k8s.io/cloud-provider-vsphere => github.com/openshift/cloud-provider-vsphere v1.19.1-0.20211222185833-7829863d0558
+	k8s.io/cloud-provider-vsphere => github.com/openshift/cloud-provider-vsphere v1.19.1-0.20240626105621-6464d0bb4928
 // sigs.k8s.io/cluster-api => sigs.k8s.io/cluster-api v0.4.5
 // sigs.k8s.io/cluster-api-provider-aws => github.com/openshift/cluster-api-provider-aws v0.2.1-0.20200929152424-eab2e087f366 // Indirect dependency through MAO from cluster API providers
 )
 
-replace sigs.k8s.io/cluster-api-provider-ibmcloud => sigs.k8s.io/cluster-api-provider-ibmcloud v0.8.0
+replace sigs.k8s.io/cluster-api-provider-ibmcloud => sigs.k8s.io/cluster-api-provider-ibmcloud v0.9.0-alpha.0.0.20240913094112-c6bcd313bce0
 
 replace github.com/openshift/assisted-service/api => github.com/openshift/assisted-service/api v0.0.0-20230831114549-1922eda29cf8
 
@@ -321,3 +321,5 @@ replace github.com/openshift/assisted-service/models => github.com/openshift/ass
 // https://issues.redhat.com/browse/OCPBUGS-8119
 // https://issues.redhat.com/browse/OCPBUGS-27507
 replace github.com/containerd/containerd => github.com/containerd/containerd v1.6.26
+
+replace github.com/vmware-tanzu/vm-operator/pkg/constants/testlabels => github.com/vmware-tanzu/vm-operator/pkg/constants/testlabels v0.0.0-20240404200847-de75746a9505

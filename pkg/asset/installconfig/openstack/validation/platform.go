@@ -15,6 +15,13 @@ import (
 	"github.com/openshift/installer/pkg/types/openstack"
 )
 
+const (
+	// MTU of 1280 is the minimum allowed for IPv6 + 100 for the
+	// OVN-Kubernetes encapsulation overhead
+	// https://issues.redhat.com/browse/OCPBUGS-2921
+	minimumMTUv6 = 1380
+)
+
 // ValidatePlatform checks that the specified platform is valid.
 func ValidatePlatform(p *openstack.Platform, n *types.Networking, ci *CloudInfo) field.ErrorList {
 	var allErrs field.ErrorList
@@ -26,7 +33,7 @@ func ValidatePlatform(p *openstack.Platform, n *types.Networking, ci *CloudInfo)
 	}
 
 	// validate the externalNetwork
-	allErrs = append(allErrs, validateExternalNetwork(p, ci, fldPath)...)
+	allErrs = append(allErrs, validateExternalNetwork(p, ci, n, fldPath)...)
 
 	// validate floating ips
 	allErrs = append(allErrs, validateFloatingIPs(p, ci, fldPath)...)
@@ -90,6 +97,9 @@ func validateControlPlanePort(p *openstack.Platform, n *types.Networking, ci *Cl
 		} else if ci.ControlPlanePortNetwork.ID != networkID {
 			allErrs = append(allErrs, field.Invalid(fldPath.Child("controlPlanePort").Child("network"), networkDetail, "network must contain subnets"))
 		}
+		if hasIPv6Subnet && ci.ControlPlanePortNetwork.MTU < minimumMTUv6 {
+			allErrs = append(allErrs, field.InternalError(fldPath.Child("controlPlanePort").Child("network"), fmt.Errorf("network should have an MTU of at least %d", minimumMTUv6)))
+		}
 	}
 	return allErrs
 }
@@ -114,10 +124,13 @@ func getSubnet(controlPlaneSubnets []*subnets.Subnet, subnetID, subnetName strin
 }
 
 // validateExternalNetwork validates the user's input for the externalNetwork and returns a list of all validation errors
-func validateExternalNetwork(p *openstack.Platform, ci *CloudInfo, fldPath *field.Path) (allErrs field.ErrorList) {
+func validateExternalNetwork(p *openstack.Platform, ci *CloudInfo, n *types.Networking, fldPath *field.Path) (allErrs field.ErrorList) {
 	// Return an error if external network was specified in the install config, but hasn't been found
 	if p.ExternalNetwork != "" && ci.ExternalNetwork == nil {
 		allErrs = append(allErrs, field.NotFound(fldPath.Child("externalNetwork"), p.ExternalNetwork))
+	}
+	if p.ExternalNetwork != "" && len(n.MachineNetwork) == 1 && n.MachineNetwork[0].CIDR.IPNet.IP.To4() == nil {
+		allErrs = append(allErrs, field.Invalid(fldPath.Child("externalNetwork"), p.ExternalNetwork, "Cannot set external network on Single Stack IPv6 cluster"))
 	}
 	return allErrs
 }
